@@ -59,8 +59,12 @@ defensively before the HTTP call.
 ## Local mail (`kind = "local_mail"`)
 
 Appends an mboxrd-formatted message to `/var/mail/<user>` directly. No
-SMTP, no MTA dependency. Operates safely in the presence of mailx,
-postfix, procmail, or another gcit instance via the same flock primitive.
+SMTP, no MTA dependency. Multiple gcit instances coordinate via
+`flock(LOCK_EX)`. Other mbox writers (mailx, procmail, postfix) may use
+dotlocking instead of flock — gcit does not acquire dotlocks, so
+concurrent writes from a dotlock-only writer are not coordinated. On
+systems where the mail spool is written by both gcit and a traditional
+MUA, verify the MUA also uses flock or configure a dedicated spool.
 
 - **Spool path.** `/var/mail/<user>` (POSIX convention). The validator
   rejects user names outside `[a-zA-Z0-9_-]+` or longer than 32
