@@ -1,0 +1,128 @@
+# gcit nightly mutation testing.
+#
+# This workflow runs the full-repo `cargo mutants` pass on a daily
+# cron, computes a caught/(caught+missed+timeout) score, renders it
+# into the shields.io endpoint JSON shape, and publishes
+# `mutants.json` to the gh-pages branch. The README's mutants badge
+# (https://img.shields.io/endpoint?url=...mutants.json) consumes
+# that file; without this workflow the badge 404s.
+#
+# Per-PR runs (`--in-diff origin/main`) live in ci.yml; this is the
+# nightly full-repo counterpart. A `workflow_dispatch` trigger is
+# included so an operator can fire a refresh from the Actions UI
+# without waiting for the next cron tick.
+
+name: nightly
+
+on:
+  schedule:
+    # 04:00 UTC daily. The exact hour is arbitrary — the goal is one
+    # run per day off-peak so the badge stays current within 24 hours.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+# `contents: write` is required by peaceiris/actions-gh-pages@v4 to
+# push to the gh-pages branch. No other write scope is granted.
+permissions:
+  contents: write
+
+jobs:
+  mutants:
+    name: cargo mutants (full repo) + publish badge JSON
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@cargo-mutants
+
+      # Full-repo run on the nightly cadence. `--json` writes
+      # `outcomes.json` whose `caught`/`missed`/`timeout` scalars drive
+      # the score below. `|| true` is intentional: cargo mutants exits
+      # non-zero when any mutant is missed, but the nightly job's
+      # purpose is to record the score, not to gate. The PR job
+      # (ci.yml `mutants-pr`) is what blocks merges.
+      - name: cargo mutants (full repo)
+        run: |
+          set -euo pipefail
+          cargo mutants --json --output mutants.out || true
+
+      # Score = caught / (caught + missed + timeout). Color
+      # thresholds: >=95 brightgreen, >=85 green, >=70 yellow,
+      # >=50 orange, <50 red. When the denominator is zero (no mutants
+      # were generated, e.g. cargo-mutants found nothing to mutate),
+      # the badge renders "0 mutants" with a lightgrey color rather
+      # than a misleading 100% brightgreen — a brightgreen 100% would
+      # imply "perfect mutation coverage" when in fact no mutations
+      # ran. Output shape is the shields.io endpoint contract:
+      #   {"schemaVersion":1,"label":"mutants","message":"<msg>","color":"<color>"}
+      - name: Compute score and render badge JSON
+        run: |
+          set -euo pipefail
+          if [ ! -f mutants.out/outcomes.json ]; then
+            echo "no mutants.out/outcomes.json; cannot compute score"
+            exit 1
+          fi
+          caught=$(jq -r '.caught'  mutants.out/outcomes.json)
+          missed=$(jq -r '.missed'  mutants.out/outcomes.json)
+          timeout=$(jq -r '.timeout' mutants.out/outcomes.json)
+          denom=$((caught + missed + timeout))
+          if [ "$denom" -eq 0 ]; then
+            # No mutants generated — see step-level comment.
+            message="0 mutants"
+            color=lightgrey
+            echo "Mutants: caught=$caught missed=$missed timeout=$timeout (0 mutants generated) color=${color}"
+          else
+            score=$((caught * 100 / denom))
+            if   [ "$score" -ge 95 ]; then color=brightgreen
+            elif [ "$score" -ge 85 ]; then color=green
+            elif [ "$score" -ge 70 ]; then color=yellow
+            elif [ "$score" -ge 50 ]; then color=orange
+            else                            color=red
+            fi
+            message="${score}%"
+            echo "Mutants: caught=$caught missed=$missed timeout=$timeout score=${score}% color=${color}"
+          fi
+          mkdir -p public
+          jq -n \
+            --arg label   "mutants" \
+            --arg message "$message" \
+            --arg color   "$color" \
+            '{schemaVersion: 1, label: $label, message: $message, color: $color}' \
+            > public/mutants.json
+          cat public/mutants.json
+
+      # Publish to gh-pages via peaceiris/actions-gh-pages@v4.
+      # `keep_files: true` preserves any other content already on the
+      # branch (so a future workflow that publishes a different badge
+      # file under the same branch is unaffected). Sole target file
+      # in this job: mutants.json.
+      - name: Publish mutants.json to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./public
+          keep_files: true
+          commit_message: "nightly: refresh mutants.json"
+
+      # Stale-badge guard. If anything in this job failed — the
+      # cargo-mutants step, the JSON render, or the gh-pages push —
+      # the README's mutants badge will continue serving the previous
+      # day's value while no operator-visible signal explains why.
+      # `if: failure()` emits a workflow-level warning annotation that
+      # surfaces in the Actions UI summary so a maintainer notices the
+      # badge is now stale. Runs unconditionally on failure (no
+      # success-path noise).
+      - name: Warn on stale badge
+        if: failure()
+        run: |
+          echo "::warning::nightly mutants run failed; the README badge will continue to serve the previous day's value until the next successful nightly run. Inspect the failed step above and re-run the workflow once the cause is fixed."
