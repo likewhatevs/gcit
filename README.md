@@ -54,6 +54,7 @@ flow cannot crash the daemon or affect other flows.
   ensure all flows use the new token immediately. Changed and removed
   flows are cancelled cleanly and the new generation starts a fresh
   poll cycle.
+- **Per-flow dispatch cooldown**: bounds dispatch frequency (default 5m) to coalesce rapid pushes. `cooldown = "0s"` opts out.
 - **Strict-mode templates**: handlebars with `set_strict_mode(true)`,
   variables namespaced as `{{flow.*}}`, `{{source.*}}`, `{{action.*}}`,
   `{{run.*}}`, `{{gcit.*}}`. No control flow, no helpers, no partials.

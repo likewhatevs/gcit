@@ -139,6 +139,8 @@ Without `--dry-run`, the daemon fires the dispatch as if a SHA change had
 been observed at the current source SHA, runs the correlator, monitors
 the run to completion, and fires the configured notifiers.
 
+`gcit trigger` bypasses cooldown — the dispatcher fires regardless of whether cooldown would have suppressed an automatic trigger.
+
 Exits `EX_TEMPFAIL=75` on transport error or unknown flow.
 
 ### `gcit reload`

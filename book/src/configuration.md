@@ -40,11 +40,14 @@ Poll defaults applied to every flow unless the flow overrides them under
 | `source_interval` | humantime duration | inclusive `[15s, 24h]` | unset; resolved per strategy (60s for GitHub API and grokmirror, 5m for ls-remote) |
 | `job_interval` | humantime duration | inclusive `[15s, 24h]` | `30s` |
 | `jitter` | float | inclusive `[0.0, 0.5]` | `0.1` |
+| `cooldown` | humantime duration | `5m` | `0s` disables throttling; non-zero bounded `[15s, 24h]`. Minimum time between dispatches per flow. |
 
 Effective interval has a 15-second floor after jitter is applied:
 `interval = base * (1 + sample * jitter)` where `sample` is uniform in
 `[-1, +1)`. Values outside the documented `jitter` range are clamped at
 runtime, but the validator still rejects out-of-range values at config load.
+
+Cooldown bounds dispatch frequency. After a trigger acceptance, subsequent SHA-diff observations within `cooldown` are suppressed. The most recent SHA at the end of the window is dispatched when the cooldown expires. Set `cooldown = "0s"` to opt out.
 
 ## `[log]`
 

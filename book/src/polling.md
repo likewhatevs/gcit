@@ -101,6 +101,14 @@ Every strategy yields a `PollOutcome`. The supervisor pairs each
 `PollObservation` so `gcit status` can report "polled <timestamp>" without
 showing a stale "no activity" indicator.
 
+## Cooldown
+
+After a dispatch fires, subsequent SHA-diff observations within the configured `cooldown` window are suppressed. `last_sha` is not advanced during suppression, so the next poll past the window re-detects the diff and dispatches the most recent SHA. Intermediate SHAs are coalesced.
+
+`gcit trigger` bypasses cooldown — manual triggers go directly to the dispatcher. Cooldown tracks only poll-originated dispatch acceptances.
+
+Default: 5 minutes. Set `cooldown = "0s"` to disable.
+
 ## Workflow dispatch correlation
 
 GitHub's `workflow_dispatch` API does not return the resulting run id.
