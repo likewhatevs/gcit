@@ -38,6 +38,8 @@ fn flow_removed_drops_flow_entry() {
         flow: "f".to_string(),
         last_sha: sha(0xaa),
         last_poll_at: t(1),
+        last_dispatched_at: None,
+        cooldown_until: None,
     });
     state.apply(StateUpdate::RunStarted {
         flow: "f".to_string(),
@@ -73,6 +75,8 @@ fn flow_removed_persists_across_save_load() {
         flow: "f".to_string(),
         last_sha: sha(0xab),
         last_poll_at: t(1),
+        last_dispatched_at: None,
+        cooldown_until: None,
     });
     state.apply(StateUpdate::FlowRemoved {
         flow: "f".to_string(),
@@ -99,6 +103,8 @@ fn re_added_flow_starts_with_empty_state_not_resurrected() {
         flow: "f".to_string(),
         last_sha: sha(0x01),
         last_poll_at: t(1),
+        last_dispatched_at: None,
+        cooldown_until: None,
     });
     state.apply(StateUpdate::RunStarted {
         flow: "f".to_string(),
@@ -112,6 +118,8 @@ fn re_added_flow_starts_with_empty_state_not_resurrected() {
         flow: "f".to_string(),
         last_sha: sha(0x02),
         last_poll_at: t(3),
+        last_dispatched_at: None,
+        cooldown_until: None,
     });
 
     let entry = state.flows.get("f").expect("re-added flow exists");
@@ -134,11 +142,15 @@ fn flow_removed_does_not_affect_other_flows() {
         flow: "f".to_string(),
         last_sha: sha(0xa1),
         last_poll_at: t(1),
+        last_dispatched_at: None,
+        cooldown_until: None,
     });
     state.apply(StateUpdate::PollObservation {
         flow: "g".to_string(),
         last_sha: sha(0xb2),
         last_poll_at: t(2),
+        last_dispatched_at: None,
+        cooldown_until: None,
     });
     state.apply(StateUpdate::FlowRemoved {
         flow: "f".to_string(),
@@ -163,6 +175,8 @@ fn flow_removed_with_active_and_notified_runs_clears_both() {
         FlowState {
             last_sha: Some("aa".repeat(20)),
             last_poll_at: Some(t(1)),
+            last_dispatched_at: None,
+            cooldown_until: None,
             active_runs: vec![RunState {
                 run_id: 1,
                 started_at: t(2),

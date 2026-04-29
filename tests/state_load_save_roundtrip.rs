@@ -56,6 +56,8 @@ fn populated_state_round_trips() {
         FlowState {
             last_sha: Some("aa".repeat(20)),
             last_poll_at: Some(t(1_000_000)),
+            last_dispatched_at: None,
+            cooldown_until: None,
             active_runs: vec![RunState {
                 run_id: 42,
                 started_at: t(1_000_100),
@@ -75,6 +77,8 @@ fn populated_state_round_trips() {
         FlowState {
             last_sha: Some("bb".repeat(20)),
             last_poll_at: Some(t(2_000_000)),
+            last_dispatched_at: None,
+            cooldown_until: None,
             active_runs: vec![],
             notified_runs: vec![],
         },
@@ -138,6 +142,8 @@ fn save_load_atomic_replace_keeps_consistency() {
             FlowState {
                 last_sha: Some("ff".repeat(20)),
                 last_poll_at: Some(t(i as i64 * 100)),
+                last_dispatched_at: None,
+                cooldown_until: None,
                 active_runs: vec![],
                 notified_runs: vec![],
             },

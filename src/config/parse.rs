@@ -50,6 +50,11 @@ pub struct PollDefaults {
     pub source_interval: Option<Duration>,
     pub job_interval: Duration,
     pub jitter: f64,
+    /// Per-flow dispatch throttle. Bounds the minimum elapsed wall
+    /// time between two poll-originated dispatch acceptances on a
+    /// flow. `Duration::ZERO` disables throttling. Default: 5
+    /// minutes (see `default_cooldown`).
+    pub cooldown: Duration,
 }
 
 impl Default for PollDefaults {
@@ -58,8 +63,18 @@ impl Default for PollDefaults {
             source_interval: None,
             job_interval: Duration::from_secs(30),
             jitter: 0.1,
+            cooldown: default_cooldown(),
         }
     }
+}
+
+/// Default value for `[poll] cooldown` and the bottom-fallback for
+/// `[flow.poll] cooldown` overrides. Five minutes balances "don't
+/// spam dispatches on a busy upstream" with "don't make operators
+/// wait forever for a manual edit + push to fire". Operators who
+/// want the pre-cooldown behaviour set `cooldown = "0s"`.
+pub fn default_cooldown() -> Duration {
+    Duration::from_secs(5 * 60)
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -166,6 +181,9 @@ pub struct PollOverride {
     pub source_interval: Option<Duration>,
     pub job_interval: Option<Duration>,
     pub jitter: Option<f64>,
+    /// Per-flow override for the dispatch cooldown. When `Some`,
+    /// replaces `PollDefaults.cooldown` for this flow.
+    pub cooldown: Option<Duration>,
 }
 
 // ---------------------------------------------------------------------
@@ -200,6 +218,8 @@ pub(crate) struct RawPollDefaults {
     pub(crate) job_interval: Option<Spanned<String>>,
     #[serde(default)]
     pub(crate) jitter: Option<Spanned<f64>>,
+    #[serde(default)]
+    pub(crate) cooldown: Option<Spanned<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -337,4 +357,6 @@ pub(crate) struct RawPollOverride {
     pub(crate) job_interval: Option<Spanned<String>>,
     #[serde(default)]
     pub(crate) jitter: Option<Spanned<f64>>,
+    #[serde(default)]
+    pub(crate) cooldown: Option<Spanned<String>>,
 }

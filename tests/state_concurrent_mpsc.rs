@@ -57,6 +57,8 @@ fn n_senders_m_updates_all_apply() {
                         flow: format!("flow-{sender}"),
                         last_sha: sha(i),
                         last_poll_at: t(i as i64),
+                        last_dispatched_at: None,
+                        cooldown_until: None,
                     })
                     .await
                     .unwrap();
@@ -115,6 +117,8 @@ fn cross_flow_updates_do_not_pollute_each_other() {
                     flow: "a".to_string(),
                     last_sha: sha(0xa0 + i),
                     last_poll_at: t(i as i64),
+                    last_dispatched_at: None,
+                    cooldown_until: None,
                 })
                 .await
                 .unwrap();
@@ -127,6 +131,8 @@ fn cross_flow_updates_do_not_pollute_each_other() {
                     flow: "b".to_string(),
                     last_sha: sha(0xb0 + i),
                     last_poll_at: t(i as i64),
+                    last_dispatched_at: None,
+                    cooldown_until: None,
                 })
                 .await
                 .unwrap();
@@ -172,6 +178,8 @@ fn single_sender_per_flow_lww_is_deterministic() {
                 flow: "f".to_string(),
                 last_sha: sha(byte),
                 last_poll_at: t(byte as i64),
+                last_dispatched_at: None,
+                cooldown_until: None,
             })
             .await
             .unwrap();
@@ -209,6 +217,8 @@ fn back_pressure_does_not_silently_drop_updates() {
                 flow: format!("bp-{i:03}"),
                 last_sha: sha(i),
                 last_poll_at: t(i as i64),
+                last_dispatched_at: None,
+                cooldown_until: None,
             })
             .await
             .unwrap();

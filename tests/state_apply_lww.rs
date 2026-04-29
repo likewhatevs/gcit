@@ -33,6 +33,8 @@ fn poll(flow: &str, byte: u8, secs: i64) -> StateUpdate {
         flow: flow.to_string(),
         last_sha: sha(byte),
         last_poll_at: t(secs),
+        last_dispatched_at: None,
+        cooldown_until: None,
     }
 }
 

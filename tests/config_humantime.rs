@@ -237,3 +237,80 @@ fn humantime_close_to_boundary_rejected(#[case] s: &str) {
         s, errors,
     );
 }
+
+fn build_with_poll_cooldown(s: &str) -> String {
+    format!(
+        r#"
+[poll]
+cooldown = "{}"
+[[flow]]
+name = "x"
+[flow.source]
+url = "https://git.kernel.org/x.git"
+ref = "refs/heads/master"
+[flow.action]
+kind = "github_workflow_dispatch"
+repo = "o/r"
+workflow = "ci.yml"
+ref = "refs/heads/main"
+credential_id = "c"
+"#,
+        s
+    )
+}
+
+#[test]
+fn cooldown_zero_accepted() {
+    // parse_cooldown explicitly accepts "0s" as the disable sentinel —
+    // unlike source_interval, which rejects 0. Loading must succeed and
+    // surface Duration::ZERO on the parsed PollDefaults.
+    let toml = build_with_poll_cooldown("0s");
+    let cfg = gcit::config::load_str(&toml, std::path::Path::new("inline"))
+        .expect("0s cooldown must parse");
+    assert_eq!(cfg.poll.cooldown, Duration::ZERO);
+}
+
+#[test]
+fn cooldown_5m_accepted() {
+    // "5m" = 300s sits inside [MIN_INTERVAL=15s, MAX_INTERVAL=24h] so
+    // parse_cooldown returns it unchanged. This pins the in-range path
+    // separately from the zero-disable path.
+    let toml = build_with_poll_cooldown("5m");
+    let cfg = gcit::config::load_str(&toml, std::path::Path::new("inline"))
+        .expect("5m cooldown must parse");
+    assert_eq!(cfg.poll.cooldown, Duration::from_secs(300));
+}
+
+#[test]
+fn cooldown_below_floor_rejected() {
+    // 10s < MIN_INTERVAL=15s and is non-zero, so parse_cooldown must
+    // emit ConfigError::Validate (not Parse — the syntax is fine).
+    let toml = build_with_poll_cooldown("10s");
+    let errors = gcit::config::load_str(&toml, std::path::Path::new("inline"))
+        .expect_err("10s cooldown must reject");
+    let any_validate = errors
+        .iter()
+        .any(|e| matches!(e, gcit::config::ConfigError::Validate { .. }));
+    assert!(
+        any_validate,
+        "expected Validate error for 10s cooldown, got {:#?}",
+        errors
+    );
+}
+
+#[test]
+fn cooldown_above_ceiling_rejected() {
+    // 25h > MAX_INTERVAL=24h, so parse_cooldown must emit
+    // ConfigError::Validate.
+    let toml = build_with_poll_cooldown("25h");
+    let errors = gcit::config::load_str(&toml, std::path::Path::new("inline"))
+        .expect_err("25h cooldown must reject");
+    let any_validate = errors
+        .iter()
+        .any(|e| matches!(e, gcit::config::ConfigError::Validate { .. }));
+    assert!(
+        any_validate,
+        "expected Validate error for 25h cooldown, got {:#?}",
+        errors
+    );
+}

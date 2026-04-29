@@ -1358,7 +1358,7 @@ mod tests {
     }
 
     fn panic_poll_factory() -> PollTaskFactory {
-        Arc::new(|_, _, _, _, _| {
+        Arc::new(|_, _, _, _, _, _| {
             panic!(
                 "poll factory invoked unexpectedly: \
                  reload-side-effect tests exercise paths that never reach spawn_flow"
@@ -1438,6 +1438,7 @@ mod tests {
             source_interval: Some(Duration::from_secs(15)),
             job_interval: Duration::from_secs(15),
             jitter: 0.0,
+            cooldown: Duration::ZERO,
         }
     }
 

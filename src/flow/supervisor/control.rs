@@ -92,6 +92,16 @@ impl control::Handler for ControlHandler {
                 .map(|t| t.to_rfc3339())
                 .map(serde_json::Value::from)
                 .unwrap_or(serde_json::Value::Null);
+            let last_dispatched_at = st
+                .and_then(|s| s.last_dispatched_at)
+                .map(|t| t.to_rfc3339())
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null);
+            let cooldown_until = st
+                .and_then(|s| s.cooldown_until)
+                .map(|t| t.to_rfc3339())
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null);
             let active_runs = st.map(|s| s.active_runs.len()).unwrap_or(0);
             let notified_runs = st.map(|s| s.notified_runs.len()).unwrap_or(0);
             // `state` field: a coarse human label so cli/status.rs's
@@ -116,6 +126,8 @@ impl control::Handler for ControlHandler {
                 "state": label,
                 "last_sha": last_sha,
                 "last_poll_at": last_poll_at,
+                "last_dispatched_at": last_dispatched_at,
+                "cooldown_until": cooldown_until,
                 "active_runs": active_runs,
                 "notified_runs": notified_runs,
                 "last_error": last_error,

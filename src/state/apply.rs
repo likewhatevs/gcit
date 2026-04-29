@@ -73,6 +73,23 @@ pub struct FlowState {
     /// RFC3339 timestamp of the most recent poll. LWW with last_sha.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_poll_at: Option<DateTime<Utc>>,
+    /// RFC3339 timestamp of the most recent poll-originated dispatch
+    /// acceptance. Updated whenever a `PollObservation` carries
+    /// `last_dispatched_at: Some(...)`; preserved when it carries
+    /// `None`. Used by the per-flow poll loop's cooldown check —
+    /// seeded from this value at flow spawn so a daemon restart
+    /// inherits the prior cooldown window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_dispatched_at: Option<DateTime<Utc>>,
+    /// RFC3339 timestamp at which the cooldown window expires. Set to
+    /// `last_dispatched_at + effective.cooldown` whenever a
+    /// `PollObservation` carries `cooldown_until: Some(...)`; preserved
+    /// when it carries `None`. Surfaced in `gcit status` so operators
+    /// can see when the next poll-originated dispatch will be allowed
+    /// without computing it themselves from `last_dispatched_at` plus
+    /// the configured cooldown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_until: Option<DateTime<Utc>>,
     /// Workflow runs gcit dispatched that have not yet reached a
     /// terminal status. RunStarted appends; RunFinished moves entries
     /// to `notified_runs`.
@@ -112,6 +129,12 @@ pub struct RunState {
 /// Apply semantics per variant (pinned by `tests/state_apply_lww.rs`):
 ///   - `PollObservation`: LWW on `(last_sha, last_poll_at)` for the
 ///     named flow. Creates the flow entry if it does not yet exist.
+///     `last_dispatched_at: Some(t)` overwrites the field with `t`;
+///     `None` leaves the prior value untouched (observation-only
+///     poll cycle; cooldown clock not re-armed). `cooldown_until`
+///     follows the same overwrite-or-preserve rule as
+///     `last_dispatched_at` (always paired in production: a
+///     dispatch acceptance arms both at once).
 ///   - `PollTimestamp`: refresh `last_poll_at` only, leaving
 ///     `last_sha` untouched. Used by strategies that prove a fast-path
 ///     "no change" without producing a fresh ObjectId (e.g. grokmirror
@@ -131,6 +154,18 @@ pub enum StateUpdate {
         flow: String,
         last_sha: ObjectId,
         last_poll_at: DateTime<Utc>,
+        /// `Some(t)` when the cycle accepted a trigger and the poll
+        /// loop wants to arm cooldown at `t`. `None` when no trigger
+        /// fired (observation-only) — `apply` preserves the prior
+        /// `last_dispatched_at` rather than clearing it.
+        last_dispatched_at: Option<DateTime<Utc>>,
+        /// `Some(t)` when the cycle accepted a trigger and the poll
+        /// loop computed the cooldown deadline as
+        /// `last_dispatched_at + effective.cooldown`. `None` when no
+        /// trigger fired — `apply` preserves the prior
+        /// `cooldown_until` rather than clearing it. Always paired
+        /// with `last_dispatched_at` in production.
+        cooldown_until: Option<DateTime<Utc>>,
     },
     PollTimestamp {
         flow: String,
@@ -170,10 +205,20 @@ impl State {
                 flow,
                 last_sha,
                 last_poll_at,
+                last_dispatched_at,
+                cooldown_until,
             } => {
                 let entry = self.flows.entry(flow).or_default();
                 entry.last_sha = Some(last_sha.to_hex().to_string());
                 entry.last_poll_at = Some(last_poll_at);
+                // `Some` arms cooldown; `None` leaves prior value
+                // untouched (observation-only poll cycle).
+                if last_dispatched_at.is_some() {
+                    entry.last_dispatched_at = last_dispatched_at;
+                }
+                if cooldown_until.is_some() {
+                    entry.cooldown_until = cooldown_until;
+                }
             }
             StateUpdate::PollTimestamp { flow, last_poll_at } => {
                 let entry = self.flows.entry(flow).or_default();
@@ -283,11 +328,15 @@ mod tests {
             flow: "f".into(),
             last_sha: sha(0xaa),
             last_poll_at: t(1),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         s.apply(StateUpdate::PollObservation {
             flow: "f".into(),
             last_sha: sha(0xbb),
             last_poll_at: t(2),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         let f = &s.flows["f"];
         assert_eq!(f.last_sha.as_deref(), Some("bb".repeat(20).as_str()));
@@ -301,6 +350,8 @@ mod tests {
             flow: "f".into(),
             last_sha: sha(0xaa),
             last_poll_at: t(1),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         s.apply(StateUpdate::PollTimestamp {
             flow: "f".into(),
@@ -456,6 +507,8 @@ mod tests {
             flow: "f".into(),
             last_sha: sha(0xaa),
             last_poll_at: t(1),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         s.apply(StateUpdate::RunStarted {
             flow: "f".into(),
@@ -482,11 +535,15 @@ mod tests {
             flow: "f".into(),
             last_sha: sha(0xaa),
             last_poll_at: t(1),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         s.apply(StateUpdate::PollObservation {
             flow: "g".into(),
             last_sha: sha(0xbb),
             last_poll_at: t(1),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         s.apply(StateUpdate::FlowRemoved { flow: "f".into() });
         assert!(!s.flows.contains_key("f"));
@@ -504,6 +561,8 @@ mod tests {
             flow: "f".into(),
             last_sha: sha(0xaa),
             last_poll_at: t(1),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         s.apply(StateUpdate::RunStarted {
             flow: "f".into(),
@@ -515,6 +574,8 @@ mod tests {
             flow: "f".into(),
             last_sha: sha(0xbb),
             last_poll_at: t(3),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         let f = &s.flows["f"];
         assert_eq!(f.last_sha.as_deref(), Some("bb".repeat(20).as_str()));
@@ -529,6 +590,8 @@ mod tests {
                 flow: "f".into(),
                 last_sha: sha(0x01),
                 last_poll_at: t(1),
+                last_dispatched_at: None,
+                cooldown_until: None,
             },
             StateUpdate::RunStarted {
                 flow: "f".into(),
@@ -539,6 +602,8 @@ mod tests {
                 flow: "f".into(),
                 last_sha: sha(0x02),
                 last_poll_at: t(3),
+                last_dispatched_at: None,
+                cooldown_until: None,
             },
             StateUpdate::RunFinished {
                 flow: "f".into(),
@@ -565,6 +630,8 @@ mod tests {
             flow: "a".into(),
             last_sha: sha(0xaa),
             last_poll_at: t(1),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         s.apply(StateUpdate::RunStarted {
             flow: "a".into(),
@@ -575,6 +642,8 @@ mod tests {
             flow: "b".into(),
             last_sha: sha(0xbb),
             last_poll_at: t(1),
+            last_dispatched_at: None,
+            cooldown_until: None,
         });
         s.apply(StateUpdate::RunStarted {
             flow: "b".into(),
@@ -600,5 +669,33 @@ mod tests {
         assert_eq!(json["schema"], 1);
         assert!(json["flows"].is_object());
         assert_eq!(json["flows"].as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn poll_observation_none_last_dispatched_preserves_prior() {
+        // Cooldown invariant: an observation-only PollObservation
+        // (last_dispatched_at = None) must not clobber a prior
+        // dispatch timestamp. apply guards the write with
+        // `if last_dispatched_at.is_some()` — this test pins that
+        // branch.
+        let mut s = State::default();
+        s.apply(StateUpdate::PollObservation {
+            flow: "f".into(),
+            last_sha: sha(0xaa),
+            last_poll_at: t(1),
+            last_dispatched_at: Some(t(1)),
+            cooldown_until: Some(t(61)),
+        });
+        s.apply(StateUpdate::PollObservation {
+            flow: "f".into(),
+            last_sha: sha(0xbb),
+            last_poll_at: t(2),
+            last_dispatched_at: None,
+            cooldown_until: None,
+        });
+        let f = &s.flows["f"];
+        assert_eq!(f.last_dispatched_at, Some(t(1)));
+        // cooldown_until is preserved by the same guard.
+        assert_eq!(f.cooldown_until, Some(t(61)));
     }
 }

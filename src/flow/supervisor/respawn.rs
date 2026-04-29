@@ -634,7 +634,7 @@ mod tests {
     /// `handle_respawn_request`. The factory is never reached on those
     /// arms — a panic here means the test wired the wrong arm.
     fn no_op_poll_factory() -> PollTaskFactory {
-        Arc::new(|_, _, _, _, _| {
+        Arc::new(|_, _, _, _, _, _| {
             panic!("poll factory invoked unexpectedly: test exercises an early-return arm")
         })
     }

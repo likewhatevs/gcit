@@ -500,6 +500,8 @@ mod tests {
             FlowState {
                 last_sha: Some("aa".repeat(20)),
                 last_poll_at: None,
+                last_dispatched_at: None,
+                cooldown_until: None,
                 active_runs: vec![],
                 notified_runs: vec![],
             },

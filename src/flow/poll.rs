@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use octocrab::Octocrab;
 use reqwest::Client as ReqwestClient;
 use tokio::sync::mpsc::Sender;
@@ -74,6 +74,10 @@ pub struct EffectivePoll {
     /// Jitter fraction applied to `source_interval` per
     /// `git::strategy::apply_jitter`. 0.0..=0.5.
     pub jitter: f64,
+    /// Minimum elapsed wall time between two poll-originated dispatch
+    /// acceptances. `Duration::ZERO` disables the throttle and every
+    /// SHA-diff fires.
+    pub cooldown: Duration,
 }
 
 impl EffectivePoll {
@@ -82,7 +86,10 @@ impl EffectivePoll {
     /// default `source_interval` (per `git::default_interval`) is the
     /// bottom fallback when neither config layer pinned a value;
     /// `job_interval` always falls back to `PollDefaults.job_interval`
-    /// because the monitor cadence is strategy-agnostic.
+    /// because the monitor cadence is strategy-agnostic. `cooldown`
+    /// also falls back to `PollDefaults.cooldown` because cooldown
+    /// is strategy-agnostic — a flow's dispatch throttle is about
+    /// downstream dispatch frequency, not source poll cadence.
     pub fn compute(
         defaults: &crate::config::PollDefaults,
         override_: &crate::config::PollOverride,
@@ -94,10 +101,12 @@ impl EffectivePoll {
             .unwrap_or_else(|| default_interval(strategy));
         let job_interval = override_.job_interval.unwrap_or(defaults.job_interval);
         let jitter = override_.jitter.unwrap_or(defaults.jitter);
+        let cooldown = override_.cooldown.unwrap_or(defaults.cooldown);
         Self {
             source_interval,
             job_interval,
             jitter,
+            cooldown,
         }
     }
 }
@@ -173,6 +182,7 @@ pub struct PollParams {
 pub async fn run(
     params: PollParams,
     initial_last_sha: Option<gix_hash::ObjectId>,
+    initial_last_dispatched_at: Option<DateTime<Utc>>,
     state_tx: Sender<StateUpdate>,
     trigger_tx: Sender<TriggerSignal>,
     cancel: CancellationToken,
@@ -182,6 +192,7 @@ pub async fn run(
         params,
         executor,
         initial_last_sha,
+        initial_last_dispatched_at,
         state_tx,
         trigger_tx,
         cancel,
@@ -203,6 +214,7 @@ pub async fn run_with_executor<E>(
     params: PollParams,
     executor: E,
     initial_last_sha: Option<gix_hash::ObjectId>,
+    initial_last_dispatched_at: Option<DateTime<Utc>>,
     state_tx: Sender<StateUpdate>,
     trigger_tx: Sender<TriggerSignal>,
     cancel: CancellationToken,
@@ -216,9 +228,11 @@ pub async fn run_with_executor<E>(
         ref_name = %params.ref_name,
         strategy = executor.strategy_label(),
         interval_secs = params.effective_poll.source_interval.as_secs(),
+        cooldown_secs = params.effective_poll.cooldown.as_secs(),
         "poll loop starting",
     );
     let mut last_sha = initial_last_sha;
+    let mut last_dispatched_at = initial_last_dispatched_at;
     // Per-loop RNG: keyed off the flow name so two flows with the
     // same source URL still phase-shift relative to each other.
     let mut rng = fastrand::Rng::with_seed(seed_from_name(&params.flow_name));
@@ -309,29 +323,110 @@ pub async fn run_with_executor<E>(
             PollOutcome::Refreshed { sha } => {
                 let now = Utc::now();
                 let diff = compare_sha(last_sha, sha);
-                let observation = StateUpdate::PollObservation {
-                    flow: params.flow_name.clone(),
-                    last_sha: sha,
-                    last_poll_at: now,
-                };
-                let signal = diff.trigger.then_some(TriggerSignal {
-                    observed_sha: sha,
-                    observed_at: now,
-                });
-                match send_trigger_then_observation(
-                    &params.flow_name,
-                    signal,
-                    observation,
-                    &state_tx,
-                    &trigger_tx,
-                    &cancel,
-                )
-                .await
-                {
-                    SendOutcome::Sent => {}
-                    SendOutcome::Cancelled
-                    | SendOutcome::TriggerChannelClosed
-                    | SendOutcome::StateChannelClosed => return,
+                if diff.trigger {
+                    // SHA-diff observed. Gate dispatch on the cooldown
+                    // window: when the previous poll-originated
+                    // dispatch acceptance is within `cooldown`, suppress
+                    // the trigger AND skip the PollObservation so the
+                    // in-memory `last_sha` does not advance — the diff
+                    // re-fires on the next poll past the window.
+                    let cooled_down = is_cooled_down(
+                        last_dispatched_at,
+                        now,
+                        params.effective_poll.cooldown,
+                    );
+                    if cooled_down {
+                        // Compute the cooldown deadline so operators
+                        // reading `gcit status` can see when the next
+                        // poll-originated dispatch will be allowed
+                        // without re-deriving it from
+                        // last_dispatched_at + the configured cooldown.
+                        // `chrono::Duration::from_std` only fails on
+                        // durations exceeding i64::MAX milliseconds —
+                        // far beyond the seconds-to-hours range a
+                        // cooldown ever takes; on the unreachable
+                        // overflow path we fall back to leaving the
+                        // deadline unset rather than crashing the loop.
+                        let cooldown_until = chrono::Duration::from_std(
+                            params.effective_poll.cooldown,
+                        )
+                        .ok()
+                        .map(|d| now + d);
+                        let observation = StateUpdate::PollObservation {
+                            flow: params.flow_name.clone(),
+                            last_sha: sha,
+                            last_poll_at: now,
+                            last_dispatched_at: Some(now),
+                            cooldown_until,
+                        };
+                        let signal = Some(TriggerSignal {
+                            observed_sha: sha,
+                            observed_at: now,
+                        });
+                        match send_trigger_then_observation(
+                            &params.flow_name,
+                            signal,
+                            observation,
+                            &state_tx,
+                            &trigger_tx,
+                            &cancel,
+                        )
+                        .await
+                        {
+                            SendOutcome::Sent => {}
+                            SendOutcome::Cancelled
+                            | SendOutcome::TriggerChannelClosed
+                            | SendOutcome::StateChannelClosed => return,
+                        }
+                        last_dispatched_at = Some(now);
+                        last_sha = Some(diff.observed);
+                    } else {
+                        // Cooldown active: suppress the trigger,
+                        // emit only PollTimestamp so `last_poll_at`
+                        // stays fresh in `gcit status`. Crucially the
+                        // in-memory `last_sha` is NOT advanced — the
+                        // SHA-diff is preserved so the next post-
+                        // cooldown poll re-detects it and fires.
+                        debug!(
+                            target: "gcit::flow::poll",
+                            flow = %params.flow_name,
+                            "cooldown active; suppressing trigger",
+                        );
+                        if state_tx
+                            .send(StateUpdate::PollTimestamp {
+                                flow: params.flow_name.clone(),
+                                last_poll_at: now,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            debug!(target: "gcit::flow::poll", flow = %params.flow_name, "state writer dropped; exiting");
+                            return;
+                        }
+                    }
+                } else {
+                    // No SHA diff (cycle 0 baseline OR upstream
+                    // unchanged-since-last-observation). Emit the
+                    // observation without arming cooldown so the
+                    // operator sees `last_poll_at` advance even on
+                    // baseline cycles. `last_dispatched_at: None` is
+                    // the sentinel that tells the apply rule to
+                    // preserve the prior cooldown timestamp; the
+                    // companion `cooldown_until: None` follows the
+                    // same preserve-prior contract for the same
+                    // reason (they are always paired).
+                    let observation = StateUpdate::PollObservation {
+                        flow: params.flow_name.clone(),
+                        last_sha: sha,
+                        last_poll_at: now,
+                        last_dispatched_at: None,
+                        cooldown_until: None,
+                    };
+                    if state_tx.send(observation).await.is_err() {
+                        debug!(target: "gcit::flow::poll", flow = %params.flow_name, "state writer dropped; exiting");
+                        return;
+                    }
+                    last_sha = Some(diff.observed);
                 }
                 if !last_error_cleared {
                     // First successful poll observation since spawn —
@@ -341,7 +436,6 @@ pub async fn run_with_executor<E>(
                     params.last_errors.lock().await.remove(&params.flow_name);
                     last_error_cleared = true;
                 }
-                last_sha = Some(diff.observed);
             }
             PollOutcome::Unchanged => {
                 // Grokmirror short-circuit: the manifest fingerprint
@@ -829,6 +923,41 @@ fn unborn_ref_message(flow: &str, url: &str, ref_name: &str) -> String {
     )
 }
 
+/// Decide whether a poll-originated dispatch is allowed at `now`
+/// given the most recent dispatch acceptance and the configured
+/// cooldown window. Three branches:
+///
+/// 1. `last_dispatched_at == None` — first dispatch ever; allow.
+/// 2. `now < last_dispatched_at` — wall-clock moved backwards;
+///    treat as cooled down (operator's clock skewed; better to
+///    fire than indefinitely suppress).
+/// 3. `now - last_dispatched_at >= cooldown` — window elapsed;
+///    allow.
+///
+/// `cooldown == Duration::ZERO` always returns true via branch 3
+/// (`now - t >= 0` is always true), so a flow with cooldown
+/// disabled fires on every SHA-diff.
+fn is_cooled_down(
+    last_dispatched_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    cooldown: Duration,
+) -> bool {
+    match last_dispatched_at {
+        None => true,
+        Some(t) => {
+            if now < t {
+                true
+            } else {
+                let elapsed = now.signed_duration_since(t);
+                match elapsed.to_std() {
+                    Ok(d) => d >= cooldown,
+                    Err(_) => true,
+                }
+            }
+        }
+    }
+}
+
 /// Deterministic seed for the per-flow jitter RNG. Keying off the
 /// flow name (rather than a process-global RNG) lets two flows
 /// polling the same upstream stay phase-shifted relative to each
@@ -916,6 +1045,55 @@ mod tests {
     }
 
     #[test]
+    fn is_cooled_down_none_returns_true() {
+        // No prior dispatch -> the `None` arm short-circuits to true
+        // regardless of `now` or `cooldown`. A fresh flow must always
+        // be eligible to fire.
+        let now = chrono::Utc::now();
+        assert!(is_cooled_down(None, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn is_cooled_down_within_window_returns_false() {
+        // last_dispatched 30s before now, cooldown 60s -> elapsed < cooldown
+        // so the gate must reject.
+        let now = chrono::Utc::now();
+        let last = now - chrono::Duration::seconds(30);
+        assert!(!is_cooled_down(Some(last), now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn is_cooled_down_past_window_returns_true() {
+        // last_dispatched 120s before now, cooldown 60s -> elapsed >= cooldown
+        // so the gate must allow.
+        let now = chrono::Utc::now();
+        let last = now - chrono::Duration::seconds(120);
+        assert!(is_cooled_down(Some(last), now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn is_cooled_down_clock_skew_backward_returns_true() {
+        // now < last_dispatched_at: the function takes the
+        // `now < t` branch and returns true unconditionally so a
+        // backwards clock step never strands a flow under cooldown.
+        let now = chrono::Utc::now();
+        let last = now + chrono::Duration::seconds(30);
+        assert!(is_cooled_down(Some(last), now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn is_cooled_down_zero_cooldown_always_true() {
+        // cooldown = ZERO: any non-negative elapsed satisfies
+        // `elapsed >= 0`, so the gate always allows. Disables
+        // throttling entirely.
+        let now = chrono::Utc::now();
+        let last = now - chrono::Duration::seconds(1);
+        assert!(is_cooled_down(Some(last), now, Duration::ZERO));
+        // Same-instant boundary: elapsed == 0 still satisfies >= 0.
+        assert!(is_cooled_down(Some(now), now, Duration::ZERO));
+    }
+
+    #[test]
     fn split_github_repo_rejects_url_without_owner_and_repo() {
         // A URL with no path segments after the host (e.g. just
         // `https://github.com/`) must surface a clear error rather
@@ -992,6 +1170,8 @@ mod tests {
                 flow: "(prefilled)".to_string(),
                 last_sha: sha(0xff),
                 last_poll_at: ts(0),
+                last_dispatched_at: None,
+                cooldown_until: None,
             })
             .await
             .unwrap();
@@ -1005,6 +1185,8 @@ mod tests {
             flow: "ordering-flow".to_string(),
             last_sha: observed_sha,
             last_poll_at: ts(100),
+            last_dispatched_at: None,
+            cooldown_until: None,
         };
 
         let helper = tokio::spawn({
@@ -1081,6 +1263,8 @@ mod tests {
             flow: "no-diff-flow".to_string(),
             last_sha: sha(0x10),
             last_poll_at: ts(50),
+            last_dispatched_at: None,
+            cooldown_until: None,
         };
         let outcome = send_trigger_then_observation(
             "no-diff-flow",
@@ -1143,6 +1327,8 @@ mod tests {
             flow: "cancelled-flow".to_string(),
             last_sha: sha(0x42),
             last_poll_at: ts(200),
+            last_dispatched_at: None,
+            cooldown_until: None,
         };
         let helper = tokio::spawn({
             let state_tx = state_tx.clone();
@@ -1209,6 +1395,8 @@ mod tests {
             flow: "closed-trigger".to_string(),
             last_sha: sha(0x07),
             last_poll_at: ts(7),
+            last_dispatched_at: None,
+            cooldown_until: None,
         };
         let outcome = send_trigger_then_observation(
             "closed-trigger",
@@ -1245,6 +1433,8 @@ mod tests {
             flow: "closed-state".to_string(),
             last_sha: sha(0x09),
             last_poll_at: ts(9),
+            last_dispatched_at: None,
+            cooldown_until: None,
         };
         let outcome = send_trigger_then_observation(
             "closed-state",
@@ -1367,6 +1557,7 @@ mod tests {
                 source_interval: Duration::from_secs(60),
                 job_interval: Duration::from_secs(30),
                 jitter: 0.0,
+                cooldown: Duration::ZERO,
             },
             rate_bucket: None,
             octo: None,
@@ -1565,6 +1756,11 @@ mod tests {
                 source_interval: Duration::from_millis(1),
                 job_interval: Duration::from_secs(30),
                 jitter: 0.0,
+                // Cooldown disabled by default — the existing tests
+                // assert the pre-cooldown trigger semantics. Tests
+                // that exercise the cooldown gating set their own
+                // value.
+                cooldown: Duration::ZERO,
             },
             rate_bucket: None,
             octo: None,
@@ -1593,7 +1789,16 @@ mod tests {
 
         let cancel_for_task = cancel.clone();
         let task = tokio::spawn(async move {
-            run_with_executor(params, executor, None, state_tx, trigger_tx, cancel_for_task).await;
+            run_with_executor(
+                params,
+                executor,
+                None,
+                None,
+                state_tx,
+                trigger_tx,
+                cancel_for_task,
+            )
+            .await;
         });
 
         // Drive virtual time forward and poll the state channel between
@@ -1653,7 +1858,16 @@ mod tests {
 
         let cancel_for_task = cancel.clone();
         let task = tokio::spawn(async move {
-            run_with_executor(params, executor, None, state_tx, trigger_tx, cancel_for_task).await;
+            run_with_executor(
+                params,
+                executor,
+                None,
+                None,
+                state_tx,
+                trigger_tx,
+                cancel_for_task,
+            )
+            .await;
         });
         // `apply_jitter` clamps cycle sleeps to MIN_INTERVAL (15s).
         // Drive virtual time forward in chunks AND poll last_errors
@@ -1726,6 +1940,7 @@ mod tests {
                 params,
                 executor,
                 initial,
+                None,
                 state_tx,
                 trigger_tx,
                 cancel_for_task,
@@ -1808,6 +2023,7 @@ mod tests {
                 source_interval: Duration::from_secs(60),
                 job_interval: Duration::from_secs(30),
                 jitter: 0.0,
+                cooldown: Duration::ZERO,
             },
             rate_bucket: None,
             octo: None,
@@ -1820,7 +2036,7 @@ mod tests {
         let start = std::time::Instant::now();
         tokio::time::timeout(
             Duration::from_millis(100),
-            run_with_executor(params, executor, None, state_tx, trigger_tx, cancel),
+            run_with_executor(params, executor, None, None, state_tx, trigger_tx, cancel),
         )
         .await
         .expect("pre-cancelled token must terminate the loop within 100ms wall-clock");

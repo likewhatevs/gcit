@@ -512,11 +512,17 @@ fn validate_poll_defaults(
             .unwrap_or(default_poll.jitter),
         None => default_poll.jitter,
     };
+    let cooldown = match &raw.cooldown {
+        Some(spanned) => parse_cooldown(spanned, "poll.cooldown", None, source, path, errors)
+            .unwrap_or(default_poll.cooldown),
+        None => default_poll.cooldown,
+    };
 
     PollDefaults {
         source_interval,
         job_interval,
         jitter,
+        cooldown,
     }
 }
 
@@ -1345,10 +1351,81 @@ fn validate_poll_override(
         .jitter
         .as_ref()
         .and_then(|s| parse_jitter(s, "flow.poll.jitter", Some(flow_name), source, path, errors));
+    let cooldown = raw.cooldown.as_ref().and_then(|s| {
+        parse_cooldown(
+            s,
+            "flow.poll.cooldown",
+            Some(flow_name),
+            source,
+            path,
+            errors,
+        )
+    });
     PollOverride {
         source_interval,
         job_interval,
         jitter,
+        cooldown,
+    }
+}
+
+/// Parse a humantime cooldown string. `0s` is explicitly accepted
+/// and disables throttling. Non-zero values are bounded to
+/// `[MIN_INTERVAL, MAX_INTERVAL]` — the same floor `source_interval`
+/// uses, so a cooldown shorter than the source poll interval is
+/// rejected by the same minimum-interval rule. Malformed input
+/// surfaces as `ConfigError::Parse`; out-of-range non-zero values
+/// surface as `ConfigError::Validate`.
+fn parse_cooldown(
+    spanned: &Spanned<String>,
+    field: &'static str,
+    flow: Option<&str>,
+    source: &str,
+    path: &Path,
+    errors: &mut Vec<ConfigError>,
+) -> Option<Duration> {
+    let raw = spanned.get_ref().clone();
+    let line = span_line(source, spanned);
+    let hint = case_confusable_hint(&raw);
+    match humantime::parse_duration(&raw) {
+        Err(e) => {
+            errors.push(ConfigError::Parse {
+                path: path.to_path_buf(),
+                line,
+                message: format!("{} = {:?}: invalid duration: {}{}", field, raw, e, hint),
+            });
+            None
+        }
+        Ok(d) => {
+            if d.is_zero() {
+                // Explicit opt-out: throttling disabled.
+                Some(Duration::ZERO)
+            } else if d < MIN_INTERVAL || d > MAX_INTERVAL {
+                errors.push(validate_err(
+                    path,
+                    vec![line],
+                    flow,
+                    field,
+                    raw.clone(),
+                    format!(
+                        "{} must be 0s (disables throttling) or between {}s and {}s; got {}s{}",
+                        field,
+                        MIN_INTERVAL.as_secs(),
+                        MAX_INTERVAL.as_secs(),
+                        d.as_secs(),
+                        hint,
+                    ),
+                    format!(
+                        "use 0s to disable, or a value in the range [{}s, {}s]",
+                        MIN_INTERVAL.as_secs(),
+                        MAX_INTERVAL.as_secs()
+                    ),
+                ));
+                None
+            } else {
+                Some(d)
+            }
+        }
     }
 }
 

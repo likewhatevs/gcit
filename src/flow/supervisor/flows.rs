@@ -35,6 +35,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use futures_util::FutureExt;
 use secrecy::ExposeSecret;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -81,6 +82,7 @@ pub type PollTaskFactory = Arc<
     dyn Fn(
             PollParams,
             Option<gix_hash::ObjectId>,
+            Option<DateTime<Utc>>,
             Sender<StateUpdate>,
             Sender<TriggerSignal>,
             CancellationToken,
@@ -179,11 +181,18 @@ pub struct SpawnContext {
 /// sees this allocation.
 #[doc(hidden)]
 pub fn production_poll_task_factory() -> PollTaskFactory {
-    Arc::new(|params, last_sha, state_tx, trigger_tx, cancel| {
-        Box::pin(crate::flow::poll::run(
-            params, last_sha, state_tx, trigger_tx, cancel,
-        ))
-    })
+    Arc::new(
+        |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
+            Box::pin(crate::flow::poll::run(
+                params,
+                last_sha,
+                last_dispatched_at,
+                state_tx,
+                trigger_tx,
+                cancel,
+            ))
+        },
+    )
 }
 
 /// Production `DispatchTaskFactory` — wraps
@@ -239,6 +248,21 @@ fn read_persisted_last_sha(
     let entry = guard.flows.get(flow_name)?;
     let hex = entry.last_sha.as_ref()?;
     gix_hash::ObjectId::from_hex(hex.as_bytes()).ok()
+}
+
+/// Read the persisted `last_dispatched_at` for `flow_name` from the
+/// state mirror. Used by `spawn_flow` to seed the per-flow poll loop's
+/// in-memory cooldown clock so a daemon restart inherits the prior
+/// cooldown window. Returns `None` when the state mirror has no
+/// observation for this flow yet, the field was never set, or the
+/// mutex is poisoned.
+fn read_persisted_last_dispatched_at(
+    state_mirror: &Arc<StdMutex<State>>,
+    flow_name: &str,
+) -> Option<DateTime<Utc>> {
+    let guard = state_mirror.lock().ok()?;
+    let entry = guard.flows.get(flow_name)?;
+    entry.last_dispatched_at
 }
 
 /// Spawn one flow's poll + dispatcher tasks. Records the flow's
@@ -357,6 +381,12 @@ pub(super) async fn spawn_flow(
     // against an unchanged source does not fire a spurious
     // TriggerSignal on cycle 1.
     let initial_last_sha = read_persisted_last_sha(&ctx.state_mirror, &flow.name);
+    // Read the persisted last_dispatched_at so the cooldown clock
+    // survives a daemon restart. Without this, every flow's first
+    // post-restart SHA-diff would dispatch immediately even if the
+    // pre-restart dispatch landed seconds ago.
+    let initial_last_dispatched_at =
+        read_persisted_last_dispatched_at(&ctx.state_mirror, &flow.name);
 
     // Spawn poll task wrapped in catch_unwind so the JoinSet exit
     // carries the flow name even on panic.
@@ -379,6 +409,7 @@ pub(super) async fn spawn_flow(
         let result = AssertUnwindSafe((poll_factory)(
             poll_params,
             initial_last_sha,
+            initial_last_dispatched_at,
             poll_state_tx,
             poll_trigger_tx,
             poll_cancel,
@@ -855,7 +886,7 @@ mod tests {
             state_mirror: Arc::new(StdMutex::new(State::default())),
             root_cancel: CancellationToken::new(),
             last_errors,
-            poll_task_factory: Arc::new(|_, _, _, _, _| {
+            poll_task_factory: Arc::new(|_, _, _, _, _, _| {
                 panic!(
                     "poll factory invoked unexpectedly: \
                      test exercises an early-return arm of spawn_flow"

@@ -61,6 +61,8 @@ fn writer_drains_pending_updates_before_exiting() {
                 flow: format!("flow-{i:03}"),
                 last_sha: sha(i),
                 last_poll_at: t(i as i64),
+                last_dispatched_at: None,
+                cooldown_until: None,
             })
             .await
             .unwrap();
@@ -102,6 +104,8 @@ fn writer_outlives_tokio_runtime() {
                     flow: format!("post-runtime-{i}"),
                     last_sha: sha(i),
                     last_poll_at: t(i as i64),
+                    last_dispatched_at: None,
+                    cooldown_until: None,
                 })
                 .await
                 .unwrap();
@@ -140,6 +144,8 @@ fn drop_sender_signals_writer_to_drain_then_exit() {
             flow: "single".to_string(),
             last_sha: sha(0xab),
             last_poll_at: t(1),
+            last_dispatched_at: None,
+            cooldown_until: None,
         })
         .await
         .unwrap();
@@ -195,6 +201,8 @@ fn channel_full_blocks_sender_does_not_drop_updates() {
                 flow: format!("bp-{i:04}"),
                 last_sha: sha((i & 0xff) as u8),
                 last_poll_at: t(i as i64),
+                last_dispatched_at: None,
+                cooldown_until: None,
             })
             .await
             .unwrap();

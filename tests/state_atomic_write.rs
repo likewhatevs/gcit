@@ -30,6 +30,8 @@ fn marker_state(marker: &str) -> State {
         FlowState {
             last_sha: Some("aa".repeat(20)),
             last_poll_at: Some(t(0)),
+            last_dispatched_at: None,
+            cooldown_until: None,
             active_runs: vec![],
             notified_runs: vec![],
         },

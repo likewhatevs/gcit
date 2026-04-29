@@ -327,6 +327,8 @@ mod tests {
                     flow: format!("f{}", i),
                     last_sha: sha((i & 0xff) as u8),
                     last_poll_at: t(i as i64),
+                    last_dispatched_at: None,
+                    cooldown_until: None,
                 })
                 .await
                 .unwrap();
@@ -408,6 +410,8 @@ mod tests {
                     flow: format!("f{}", i),
                     last_sha: sha((i & 0xff) as u8),
                     last_poll_at: t(i as i64),
+                    last_dispatched_at: None,
+                    cooldown_until: None,
                 })
                 .await
                 .unwrap();
@@ -444,6 +448,8 @@ mod tests {
                     flow: format!("flow{}", i),
                     last_sha: sha((i & 0xff) as u8),
                     last_poll_at: t(i as i64),
+                    last_dispatched_at: None,
+                    cooldown_until: None,
                 })
                 .await
                 .unwrap();
@@ -552,6 +558,8 @@ mod tests {
                 flow: "flow-batch1".into(),
                 last_sha: sha(0xaa),
                 last_poll_at: t(100),
+                last_dispatched_at: None,
+                cooldown_until: None,
             })
             .await
             .unwrap();
@@ -574,6 +582,8 @@ mod tests {
                 flow: "flow-batch2".into(),
                 last_sha: sha(0xbb),
                 last_poll_at: t(200),
+                last_dispatched_at: None,
+                cooldown_until: None,
             })
             .await
             .unwrap();
@@ -660,6 +670,8 @@ mod tests {
                 flow: "flow-shutdown".into(),
                 last_sha: sha(0xcc),
                 last_poll_at: t(300),
+                last_dispatched_at: None,
+                cooldown_until: None,
             })
             .await
             .unwrap();
@@ -744,6 +756,8 @@ mod tests {
                 flow: "flow-poisoned".into(),
                 last_sha: sha(0xee),
                 last_poll_at: t(400),
+                last_dispatched_at: None,
+                cooldown_until: None,
             })
             .await
             .unwrap();

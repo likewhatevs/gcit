@@ -287,7 +287,7 @@ async fn supervisor_run_with_factories_boots_and_shuts_down_cleanly() {
     // PollTaskFactory / DispatchTaskFactory type aliases exactly.
     let poll_factory: PollTaskFactory = {
         let invocations = Arc::clone(&poll_invocations);
-        Arc::new(move |params, last_sha, state_tx, trigger_tx, cancel| {
+        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
             // Fresh ScriptedPollExecutor per spawn so the script's
             // internal cycle counter resets after a respawn (which is
             // what production code does too — RealPollExecutor::for_url
@@ -295,7 +295,7 @@ async fn supervisor_run_with_factories_boots_and_shuts_down_cleanly() {
             let executor = ScriptedPollExecutor::new(Arc::clone(&invocations), 0xaa);
             let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
                 Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, state_tx, trigger_tx, cancel,
+                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
                 ));
             fut
         })
@@ -654,7 +654,7 @@ async fn supervisor_respawns_panicked_flow_and_clears_last_error() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, state_tx, trigger_tx, cancel| {
+        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
             let call_n = factory_calls.fetch_add(1, Ordering::SeqCst);
             if call_n == 0 {
                 // Gen-1: synthesize a future whose first poll panics.
@@ -680,7 +680,7 @@ async fn supervisor_respawns_panicked_flow_and_clears_last_error() {
                 );
                 let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
                     Box::pin(poll_run_with_executor(
-                        params, executor, last_sha, state_tx, trigger_tx, cancel,
+                        params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
                     ));
                 fut
             }
@@ -863,7 +863,7 @@ async fn supervisor_sighup_reload_restarts_url_changed_flow() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, state_tx, trigger_tx, cancel| {
+        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
             factory_calls.fetch_add(1, Ordering::SeqCst);
             let executor = ScriptedPollExecutor::new(
                 Arc::clone(&poll_cycle_invocations),
@@ -871,7 +871,7 @@ async fn supervisor_sighup_reload_restarts_url_changed_flow() {
             );
             let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
                 Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, state_tx, trigger_tx, cancel,
+                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
                 ));
             fut
         })
@@ -1117,13 +1117,13 @@ async fn supervisor_sighup_reload_adds_new_flow_via_spawn_arm() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, state_tx, trigger_tx, cancel| {
+        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
             factory_calls.fetch_add(1, Ordering::SeqCst);
             let executor =
                 ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xdd);
             let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
                 Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, state_tx, trigger_tx, cancel,
+                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
                 ));
             fut
         })
@@ -1262,13 +1262,13 @@ async fn supervisor_sighup_reload_restarts_non_url_change_via_restart_arm() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, state_tx, trigger_tx, cancel| {
+        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
             factory_calls.fetch_add(1, Ordering::SeqCst);
             let executor =
                 ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xee);
             let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
                 Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, state_tx, trigger_tx, cancel,
+                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
                 ));
             fut
         })
@@ -1383,13 +1383,13 @@ async fn supervisor_control_command_trigger_dry_run_returns_rendered_payload() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, state_tx, trigger_tx, cancel| {
+        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
             factory_calls.fetch_add(1, Ordering::SeqCst);
             let executor =
                 ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xff);
             let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
                 Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, state_tx, trigger_tx, cancel,
+                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
                 ));
             fut
         })
@@ -1549,13 +1549,13 @@ async fn supervisor_sigint_routes_to_shutdown_branch() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, state_tx, trigger_tx, cancel| {
+        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
             factory_calls.fetch_add(1, Ordering::SeqCst);
             let executor =
                 ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xa1);
             let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
                 Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, state_tx, trigger_tx, cancel,
+                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
                 ));
             fut
         })
@@ -1688,7 +1688,7 @@ async fn supervisor_run_with_factories_returns_daemon_error_config_on_duplicate_
 
     // Factories panic if invoked. They MUST NOT be — the boot path
     // exits at config-load (run.rs:115) before spawn_initial_flows.
-    let poll_factory: PollTaskFactory = Arc::new(|_, _, _, _, _| {
+    let poll_factory: PollTaskFactory = Arc::new(|_, _, _, _, _, _| {
         panic!(
             "poll factory invoked unexpectedly: \
              boot must abort at the config-load Err arm before any spawn"
@@ -1785,7 +1785,7 @@ async fn supervisor_run_with_factories_returns_daemon_error_state_lock_held_when
         .try_write()
         .expect("test must successfully acquire the flock before booting the daemon");
 
-    let poll_factory: PollTaskFactory = Arc::new(|_, _, _, _, _| {
+    let poll_factory: PollTaskFactory = Arc::new(|_, _, _, _, _, _| {
         panic!(
             "poll factory invoked unexpectedly: \
              boot must abort at the LockHeld arm before any spawn"
