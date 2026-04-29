@@ -1,0 +1,17 @@
+# `repo` must match owner/repo. Single token "no-slash"
+# rejected at config load. Expect Validate error pointing at line 14
+# (the `repo = "no-slash"` assignment).
+
+[[flow]]
+name = "x"
+
+[flow.source]
+url = "https://git.kernel.org/x.git"
+ref = "refs/heads/master"
+
+[flow.action]
+kind          = "github_workflow_dispatch"
+repo          = "no-slash"
+workflow      = "ci.yml"
+ref           = "refs/heads/main"
+credential_id = "c"

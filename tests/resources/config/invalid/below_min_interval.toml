@@ -1,0 +1,20 @@
+# MIN_INTERVAL=15s, MAX_INTERVAL=24h enforced at parse time.
+# 5s is below the 15s floor; expect Validate error pointing at line 6
+# (the `source_interval = "5s"` assignment) with field name + value.
+
+[poll]
+source_interval = "5s"
+
+[[flow]]
+name = "x"
+
+[flow.source]
+url = "https://git.kernel.org/x.git"
+ref = "refs/heads/master"
+
+[flow.action]
+kind          = "github_workflow_dispatch"
+repo          = "o/r"
+workflow      = "ci.yml"
+ref           = "refs/heads/main"
+credential_id = "c"

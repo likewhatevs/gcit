@@ -1,0 +1,29 @@
+# Minimal valid config: one flow with one Discord destination, every
+# optional field omitted so the loader exercises every documented
+# default.
+#
+# Defaults this asserts:
+#   poll.job_interval = 30s
+#   poll.jitter       = 0.1
+#   poll.source_interval = None (per-strategy fallback applies)
+#   http.request_timeout = 30s
+#   flow.enabled = true
+#   destination.fire_on = [run_complete]
+
+[[flow]]
+name = "minimal"
+
+[flow.source]
+url = "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git"
+ref = "refs/heads/master"
+
+[flow.action]
+kind          = "github_workflow_dispatch"
+repo          = "owner/repo"
+workflow      = "ci.yml"
+ref           = "refs/heads/main"
+credential_id = "github_pat"
+
+[[flow.destination]]
+kind          = "discord_webhook"
+credential_id = "discord_webhook"

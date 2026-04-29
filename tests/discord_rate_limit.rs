@@ -18,7 +18,7 @@
 //   call hang forever — twilight never surfaces the 429 to gcit's
 //   classifier. We instead use a 401 (which twilight does NOT retry,
 //   per the same future.rs branch at line 389-404) to drive flow A
-//   into NotifyError::Permanent. The "isolation" property the brief
+//   into NotifyError::Permanent. The "isolation" property the test
 //   targets — flow A's failure doesn't deflect flow B's success —
 //   is proven equally well by any non-200 status that surfaces
 //   cleanly.

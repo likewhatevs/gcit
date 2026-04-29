@@ -1,0 +1,21 @@
+# jitter must be in 0.0..=0.5. 0.7 is above the upper bound;
+# expect Validate error pointing at line 7 (the `jitter = 0.7` assignment).
+
+[poll]
+source_interval = "60s"
+job_interval    = "30s"
+jitter          = 0.7
+
+[[flow]]
+name = "x"
+
+[flow.source]
+url = "https://git.kernel.org/x.git"
+ref = "refs/heads/master"
+
+[flow.action]
+kind          = "github_workflow_dispatch"
+repo          = "o/r"
+workflow      = "ci.yml"
+ref           = "refs/heads/main"
+credential_id = "c"

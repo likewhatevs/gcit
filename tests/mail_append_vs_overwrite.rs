@@ -229,7 +229,7 @@ async fn many_concurrent_appends_preserve_all_messages() {
     // The flock guarantees mutual exclusion across the gcit
     // notifiers; O_APPEND ensures atomic landing.
     //
-    // Note: the brief mentioned 100 writers; 32 is enough to
+    // Note: 32 writers is enough to
     // exercise the serialisation path while keeping the test
     // wallclock low. The file_lock is held during open + write +
     // sync_all, so 32 contenders fully exercise the queue.

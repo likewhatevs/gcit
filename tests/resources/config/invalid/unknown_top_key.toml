@@ -1,0 +1,19 @@
+# Every struct uses #[serde(deny_unknown_fields)].
+# `polll` (typo) at top level must be rejected with a Parse error pointing
+# at line 5 (the `polll` assignment).
+
+polll = { source_interval = "60s" }
+
+[[flow]]
+name = "x"
+
+[flow.source]
+url = "https://git.kernel.org/x.git"
+ref = "refs/heads/master"
+
+[flow.action]
+kind          = "github_workflow_dispatch"
+repo          = "o/r"
+workflow      = "ci.yml"
+ref           = "refs/heads/main"
+credential_id = "c"

@@ -1,0 +1,18 @@
+# `ref` must start with "refs/". Bare "master" is invalid;
+# expect Validate error pointing at line 11 (the `ref = "master"`
+# assignment) naming flow="x", field="source.ref", value="master", and a
+# suggestion to use "refs/heads/master".
+
+[[flow]]
+name = "x"
+
+[flow.source]
+url = "https://git.kernel.org/x.git"
+ref = "master"
+
+[flow.action]
+kind          = "github_workflow_dispatch"
+repo          = "o/r"
+workflow      = "ci.yml"
+ref           = "refs/heads/main"
+credential_id = "c"

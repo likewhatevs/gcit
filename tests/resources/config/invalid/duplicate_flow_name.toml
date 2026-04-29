@@ -1,0 +1,30 @@
+# `flow.name` must be unique. Two flows both named "linux"
+# must fail at config load with line numbers for both occurrences.
+
+[[flow]]
+name = "linux"
+
+[flow.source]
+url = "https://git.kernel.org/x.git"
+ref = "refs/heads/master"
+
+[flow.action]
+kind          = "github_workflow_dispatch"
+repo          = "o/r"
+workflow      = "ci.yml"
+ref           = "refs/heads/main"
+credential_id = "c1"
+
+[[flow]]
+name = "linux"
+
+[flow.source]
+url = "https://git.kernel.org/y.git"
+ref = "refs/heads/master"
+
+[flow.action]
+kind          = "github_workflow_dispatch"
+repo          = "o/s"
+workflow      = "ci.yml"
+ref           = "refs/heads/main"
+credential_id = "c2"

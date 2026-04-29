@@ -100,7 +100,7 @@ pub async fn poll(
     let r = match result {
         Ok(r) => r,
         Err(e) => {
-            // Pass-1 fix #2: surface 404 directly as Ok(UnbornRef)
+            // Surface 404 directly as Ok(UnbornRef)
             // rather than Err(Permanent). The doc + PollOutcome
             // contract pin this; the caller logs WARN and keeps
             // polling on cadence.
@@ -174,7 +174,7 @@ pub fn classify_status(status: StatusCode, message: &str) -> GithubError {
         };
     }
     if status == StatusCode::FORBIDDEN {
-        // Per pass-1 fix #6: GitHub uses 403 for both rate-limited
+        // GitHub uses 403 for both rate-limited
         // (Transient — operator should wait for the reset) and
         // permission-denied (Permanent — PAT lacks the required
         // scope; retrying won't help). The message body
