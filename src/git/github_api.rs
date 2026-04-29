@@ -137,8 +137,8 @@ pub async fn poll(
 
 /// Classify an octocrab error.
 ///
-/// `poll()` short-circuits 404 into `Ok(PollOutcome::UnbornRef)` per
-/// pass-1 fix #2; this function handles every OTHER GitHub error.
+/// `poll()` short-circuits 404 into `Ok(PollOutcome::UnbornRef)`;
+/// this function handles every OTHER GitHub error.
 /// Non-GitHub errors (transport, hyper, encode) are Transient.
 pub fn classify_error(err: octocrab::Error) -> GithubError {
     if let octocrab::Error::GitHub { source, .. } = &err {
@@ -261,8 +261,8 @@ mod tests {
 
     #[test]
     fn classify_403_with_rate_limit_message_is_transient() {
-        // Per pass-1 fix #6: 403 is split by message. A 403 whose
-        // body mentions "rate limit" is Transient.
+        // 403 is split by message. A 403 whose body mentions
+        // "rate limit" is Transient.
         let err = classify_status(StatusCode::FORBIDDEN, "API rate limit exceeded for user");
         assert!(matches!(err, GithubError::Transient { .. }), "got {err:?}");
     }

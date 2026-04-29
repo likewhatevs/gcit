@@ -440,13 +440,13 @@ pub(super) async fn run_reload(
     // Both paths fall back to "proceed anyway with overlap" on
     // budget exhaustion. The remaining race manifests only when a
     // task is cancelled but ignores its CancellationToken AND the
-    // drain budget runs out. Per-variant convergence (apply.rs)
-    // bounds the worst case in that exit path:
+    // drain budget runs out. Per-variant LWW (apply.rs) bounds the
+    // worst case in that exit path:
     //   - PollObservation: LWW on (last_sha, last_poll_at). A late
     //     old-gen value gets overwritten by the new-gen's next
     //     observation. Worst case: one stale-but-valid SHA appears
     //     transiently in state.json.
-    //   - PollTimestamp: LWW on last_poll_at only. Same convergence.
+    //   - PollTimestamp: LWW on last_poll_at only. Same guarantees.
     //   - RunStarted: appends to active_runs with run_id dedup. A
     //     wedged old-gen dispatcher whose correlator finally returns
     //     after the drain timeout will enqueue RunStarted for a

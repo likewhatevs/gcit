@@ -50,7 +50,7 @@ const RESPAWN_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// short timer. Each re-enqueue increments `attempts`; once
 /// `RESPAWN_MAX_ATTEMPTS` is hit the supervisor proceeds anyway and
 /// logs a warning — same trade-off as the run_reload drain timeout
-/// (the writer's per-variant convergence handles the brief overlap).
+/// (the writer's per-variant LWW handles the brief overlap).
 ///
 /// Supervisor select! responsiveness is preserved: each retry's timer
 /// runs in its own spawned task, the supervisor only sees the

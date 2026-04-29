@@ -151,9 +151,8 @@ fn poll_blocking(url: &str, ref_name: &str) -> Result<PollOutcome, LsRemoteError
     Ok(match find_ref(&refs, ref_name) {
         FoundRef::Direct(oid) => PollOutcome::Refreshed { sha: oid },
         FoundRef::PeeledTag(tag_oid) => {
-            // Per the design ruling in tests/poll_symbolic_ref.rs::
-            // annotated_tag_dereferenced_to_commit_sha, gcit reports
-            // the TAG SHA (not the peeled commit SHA) so re-tagging
+            // gcit reports the TAG SHA (not the peeled commit SHA)
+            // so re-tagging
             // is detectable. The Peeled variant carries both; we
             // return tag.
             PollOutcome::Refreshed { sha: tag_oid }

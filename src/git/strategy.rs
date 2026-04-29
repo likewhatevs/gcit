@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn default_intervals_match_design() {
+    fn default_intervals_match_documented_values() {
         assert_eq!(
             default_interval(PollStrategy::GithubApi),
             Duration::from_secs(60)

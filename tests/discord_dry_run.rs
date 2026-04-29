@@ -20,8 +20,8 @@ async fn dry_run_does_not_make_network_call() {
     // wiremock mounted; gcit trigger linux-mainline-ci --dry-run.
     // Assert wiremock receives ZERO POSTs (expect(0)).
     //
-    // Mutation target: implementer wires --dry-run only into the
-    // dispatcher path but not the notifier path. Test catches.
+    // Guards against --dry-run being wired into the dispatcher path
+    // but not the notifier path.
     //
     // Cross-references discord_wait_param.rs::dry_run_sets_wait_to_false_or_skips_request_entirely.
 }
@@ -35,13 +35,9 @@ fn dry_run_prints_request_url_with_redacted_token() {
     // Captured stdout contains:
     //   POST https://discord.com/api/webhooks/12345/[REDACTED]?wait=true
     //
-    // SPEC GAP: spec says "redact credential values" but
-    // doesn't pin the exact rendering for partial-secret URLs. The
-    // webhook id is NOT a secret (it's a stable, public-on-discord
-    // identifier of the webhook), but the token IS (anyone with the
-    // token can post to the webhook). Recommend: print the URL with the
-    // token segment replaced by [REDACTED]. flag — test pins the
-    // chosen rendering.
+    // The webhook id is NOT a secret (it's a stable, public-on-discord
+    // identifier of the webhook), but the token IS. The URL should
+    // render with the token segment replaced by [REDACTED].
     //
     // Related: SecretString redaction in tracing/Display/Debug paths.
 }
@@ -63,14 +59,9 @@ fn dry_run_prints_full_embed_json_body() {
     //     ]
     //   }
     //
-    // SPEC GAP: CLI table row for `gcit trigger` says dry-run
-    // prints "all outbound payloads" but doesn't pin format
-    // (pretty vs compact JSON,
-    // headers in addition to body, etc.). Recommend:
-    //   - pretty-printed JSON body
-    //   - one section per outbound: METHOD URL\nheaders\nbody
-    //   - separator lines between destinations
-    // flag.
+    // Format: pretty-printed JSON body, one section per outbound
+    // destination (METHOD URL, headers, body), separator lines
+    // between destinations.
 }
 
 #[test]
@@ -104,8 +95,8 @@ fn dry_run_prints_credential_id_alongside_redacted_value() {
     //
     // Pin via assert_contains.
     //
-    // Mutation target: implementer redacts both the id AND the value.
-    // Operator can't tell which credential is in use. Test catches.
+    // Guards against redacting both the id AND the value — the
+    // operator needs to see which credential is in use.
 }
 
 #[rstest]
@@ -114,14 +105,9 @@ fn dry_run_prints_credential_id_alongside_redacted_value() {
 #[ignore = "requires gcit trigger --dry-run feature (not yet implemented)"]
 fn dry_run_output_terminal_styling(#[case] csi: &str) {
     let _ = csi;
-    // SPEC GAP: dry-run output may use terminal colors (red for
-    // [REDACTED] highlighting, gray for headers, etc.). Spec
-    // doesn't pin this. Recommend:
-    //   - colors when stdout is a TTY (isatty)
-    //   - plain text when stdout is redirected (CI logs, file capture)
-    //   - --no-color flag honored
-    //   - NO_COLOR env var honored (https://no-color.org/)
-    // flag.
+    // Colors when stdout is a TTY, plain text when redirected.
+    // --no-color flag and NO_COLOR env var (https://no-color.org/)
+    // should be honored.
     //
     // Test asserts that with stdout-not-a-tty, no CSI escape sequences
     // appear in the captured output.
@@ -142,11 +128,8 @@ async fn dry_run_with_template_compile_error_surfaces_at_dry_run() {
     // code (recommend reusing for dry-run since both check template
     // validity).
     //
-    // SPEC GAP: dry-run exit codes are 0/EX_USAGE=64/EX_TEMPFAIL=75 —
-    // no EX_DATAERR. But a template-compile error in
-    // dry-run mode IS data-error category. Recommend amending exit
-    // codes for trigger to include EX_DATAERR=65 for template errors.
-    // flag.
+    // A template-compile error in dry-run is a data-error category —
+    // exit EX_DATAERR=65 to match gcit validate-template.
 }
 
 #[tokio::test]

@@ -137,9 +137,7 @@ impl RateLimitState {
 
     /// Update the snapshot opportunistically from response headers.
     /// Every API response carries `X-RateLimit-Remaining` /
-    /// `X-RateLimit-Reset` (the design intent matched by
-    /// `tests/github_rate_limit_poller.rs`'s
-    /// `pollers_per_credential_run_independently`). We extract what
+    /// `X-RateLimit-Reset`. We extract what
     /// we can; if a header is missing or non-numeric, that field
     /// is left untouched rather than crashing the call site.
     pub async fn observe_headers(&self, headers: &HeaderMap) {

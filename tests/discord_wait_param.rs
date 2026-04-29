@@ -15,8 +15,7 @@
 // — verify exact shape against twilight-http/src/request/channel/webhook/
 // execute_webhook.rs:.wait at implementation time).
 
-// twilight_model referenced only inside commented assertion shapes; the
-// implementer will add the use clause when wiring the asserts.
+// twilight_model referenced only inside commented assertion shapes.
 
 #[tokio::test]
 #[ignore = "requires gcit::discord::webhook::send (not yet implemented)"]
@@ -29,14 +28,11 @@ async fn webhook_request_includes_wait_query_param() {
     //
     // The ?wait=true must be in the URL or wiremock won't match.
     //
-    // Mutation target: implementer never calls .wait() — the request
-    // goes without ?wait=true, Discord returns 204, gcit can't extract
-    // a receipt. Test catches via the query_param matcher.
+    // Guards against missing .wait() — without ?wait=true Discord
+    // returns 204 and gcit can't extract a receipt.
     //
-    // SPEC GAP: spec doesn't pin "always use ?wait=true". Could
-    // also be conditional on, e.g., dry-run or status emission. Recommend:
-    // always use ?wait=true so gcit always returns a meaningful receipt
-    // (cost: 200 vs 204 response, ~100 bytes per webhook). flag.
+    // Always use ?wait=true so gcit gets a meaningful receipt
+    // (cost: 200 vs 204 response, ~100 bytes per webhook).
 }
 
 #[tokio::test]
@@ -54,19 +50,16 @@ async fn webhook_response_message_id_extracted_to_receipt() {
     //   receipt: "1234567890123456789".to_string()
     // }.
     //
-    // Mutation target: implementer returns Sent with empty receipt OR
-    // with channel_id instead of message id. Test catches via assert_eq
-    // on the receipt.
+    // Guards against returning an empty receipt or using channel_id
+    // instead of message id.
 }
 
 #[tokio::test]
 #[ignore = "requires gcit trigger --dry-run feature (not yet implemented)"]
 async fn webhook_204_with_wait_unset_returns_sent_with_marker() {
-    // SPEC GAP fallback path: if implementer chooses NOT to use ?wait=true
-    // for some reason, the 204 response (no message id) needs a stable
-    // receipt value. Recommend: receipt = "no-receipt" or "" with a doc
-    // comment explaining why. flag — depends on the resolution of the
-    // recommended-always-?wait=true gap above.
+    // Fallback: if ?wait=true is not used, the 204 response has no
+    // message id. The receipt should be a stable sentinel value
+    // (e.g. "no-receipt").
     //
     // For now, this test asserts the receipt is non-None and is a stable
     // sentinel value (not a uuid that would change between runs).
@@ -83,9 +76,8 @@ async fn webhook_response_message_id_lossless_through_u64() {
     // Test: 200 response with id = "1234567890123456789" (max range).
     // Assert receipt == "1234567890123456789" exactly.
     //
-    // Mutation target: implementer parses id as f64 (loses precision past
-    // 2^53) or as i32 (overflow). serde_json's Number → u64 path is
-    // correct; this test guards against any custom parsing.
+    // Guards against parsing id as f64 (loses precision past 2^53)
+    // or as i32 (overflow). serde_json's Number → u64 path is correct.
     //
     // Cross-references twilight-model's Id<...> use of NonZeroU64.
 }
