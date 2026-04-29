@@ -13,9 +13,8 @@
 #   docs       — mdbook build + test + linkcheck
 #   sd-analyze — systemd-analyze security score on the install-emitted
 #                gcit.service unit (target GOOD, score < 3.0)
-#   mutants    — cargo mutants per-PR (--in-diff origin/main); the
-#                nightly full-repo run lives in nightly.yml (separate
-#                cron-driven workflow).
+#   mutants    — cargo mutants per-PR (--in-diff origin/main); badge
+#                JSON is published manually via `just scripts::publish-mutants`
 #
 # `cargo nextest run` is the canonical test runner; coverage is
 # collected via `cargo llvm-cov nextest` so the same nextest
@@ -41,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.85
         with:
           components: rustfmt, clippy, llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
@@ -53,8 +52,8 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      - name: cargo clippy --lib --bins -- -D warnings
-        run: cargo clippy --lib --bins -- -D warnings
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       # 90% line-coverage gate. The nextest profile-default is
       # `default`; runner timeouts are bounded by the runner's own 6h
@@ -83,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.85
         with:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
@@ -107,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
@@ -128,24 +127,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
       - name: Install mdbook
         uses: taiki-e/install-action@mdbook
       - name: Install mdbook-linkcheck
         run: cargo install mdbook-linkcheck --locked
       - name: mdbook build
-        run: |
-          if [ -d book ]; then
-            mdbook build book
-          else
-            echo "no book/ directory yet; mdbook setup is not yet implemented"
-          fi
+        run: mdbook build book
       - name: mdbook test
-        run: |
-          if [ -d book ]; then
-            mdbook test book
-          fi
+        run: mdbook test book
+      - name: Deploy mdbook to gh-pages
+        if: github.ref == 'refs/heads/main' && hashFiles('book/src/SUMMARY.md') != ''
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./book/book/html
+          destination_dir: book
+          keep_files: true
+          commit_message: "ci: refresh mdbook"
 
   sd-analyze:
     # systemd-analyze security gcit.service: assert exposure score < 3.0.
@@ -158,7 +159,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
       - name: Install systemd
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends systemd
@@ -226,10 +227,9 @@ jobs:
           PY
 
   mutants-pr:
-    # Per-PR cargo-mutants in --in-diff mode. The job posts the score
-    # as a PR comment and fails the gate if missed > 0. The shields.io
-    # badge JSON is published by the nightly job (separate workflow
-    # file).
+    # Per-PR cargo-mutants in --in-diff mode. Fails the gate if any
+    # mutant is missed. The shields.io
+    # badge JSON is published manually via `just scripts::publish-mutants`.
     name: cargo mutants (--in-diff origin/main)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -237,7 +237,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
       - name: Install nextest
         uses: taiki-e/install-action@nextest
@@ -246,7 +246,8 @@ jobs:
       - name: cargo mutants --in-diff
         run: |
           set -euo pipefail
-          cargo mutants --in-diff origin/main --json --output mutants.out
+          git diff origin/main -- . > pr.diff
+          cargo mutants --in-diff pr.diff --json --output mutants.out
 
       # Always upload the cargo-mutants output directory as a PR
       # artifact. cargo-mutants writes the JSON outcomes plus a
@@ -265,7 +266,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Compute score + post comment
+      - name: Compute score + gate on missed mutants
         if: always()
         run: |
           set -euo pipefail

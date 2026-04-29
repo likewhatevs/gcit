@@ -5,6 +5,7 @@ Poll git repos, dispatch GitHub Actions workflows, post Discord notifications. L
 [![ci](https://github.com/likewhatevs/gcit/actions/workflows/ci.yml/badge.svg)](https://github.com/likewhatevs/gcit/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/likewhatevs/gcit/branch/main/graph/badge.svg)](https://codecov.io/gh/likewhatevs/gcit)
 [![mutants](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/likewhatevs/gcit/gh-pages/mutants.json)](https://github.com/likewhatevs/gcit/actions/workflows/ci.yml)
+[![docs](https://img.shields.io/badge/docs-mdbook-blue.svg)](https://likewhatevs.github.io/gcit/book/)
 [![license](https://img.shields.io/badge/license-GPL--2.0--only-blue.svg)](LICENSE)
 
 ## What it does
@@ -29,8 +30,8 @@ flow cannot crash the daemon or affect other flows.
   with a `head_sha + created>=` fallback when `run-name` is not configured.
 - **Discord webhook notifications**: programmatic
   [twilight](https://twilight.rs) embeds with conclusion-coloured states,
-  configurable templates, and webhook host allowlist (`discord.com` /
-  `discordapp.com` only).
+  configurable templates, and webhook host allowlist (`discord.com`,
+  `discordapp.com`, `ptb.discord.com`, `canary.discord.com`).
 - **Local mail (mbox append)**: notifier writes mboxrd-formatted messages to
   `/var/mail/<user>` directly. No SMTP, no MTA dependency. Uses `O_NOFOLLOW` +
   `flock(LOCK_EX)` + `fsync` for safe concurrent appends.
@@ -196,9 +197,9 @@ journalctl -u gcit -f
 | `gcit --version` | version + git SHA |
 
 Exit codes follow `sysexits.h`: `0` success, `64` (`EX_USAGE`) bad invocation,
-`65` (`EX_DATAERR`) bad template, `71` (`EX_OSERR`) OS-level failure, `75`
-(`EX_TEMPFAIL`) transient (e.g. control socket unreachable), `78` (`EX_CONFIG`)
-config error.
+`65` (`EX_DATAERR`) bad template, `70` (`EX_SOFTWARE`) internal software error,
+`71` (`EX_OSERR`) OS-level failure, `75` (`EX_TEMPFAIL`) transient (e.g.
+control socket unreachable), `78` (`EX_CONFIG`) config error.
 
 When `--config` is not passed, the default depends on who is running
 gcit. `gcit install --user` and `gcit uninstall --user` always resolve
@@ -391,7 +392,7 @@ run-name: gcit-${{ inputs.gcit_run_id }}
 ```
 
 When `run-name` is not configured, gcit falls back to filtering by
-`head_sha + ?created=>=<dispatch_iso>` and selects the most recent matching
+`head_sha + ?created>=<dispatch_iso>` and selects the most recent matching
 run. The fallback emits a WARN recommending the `run-name` directive.
 
 ## Logging

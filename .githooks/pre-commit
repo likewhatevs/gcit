@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+#
+# To enable locally:
+#   git config core.hooksPath .githooks
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "Warning: cargo not found, skipping pre-commit checks"
+    exit 0
+fi
+
+echo "Running cargo fmt --check..."
+if ! cargo fmt --all -- --check; then
+    echo "fmt check failed — run 'cargo fmt --all' and re-stage"
+    exit 1
+fi
+
+echo "Running cargo clippy..."
+if ! cargo clippy --workspace --all-targets -- -D warnings; then
+    echo "clippy failed, aborting commit"
+    exit 1
+fi
+
+exit 0
