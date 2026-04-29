@@ -111,8 +111,13 @@ The daemon is not running, or the socket path differs from the default.
 Check:
 
 ```sh
+# system-scope install:
 systemctl status gcit
 journalctl -u gcit -n 100
+
+# user-scope install:
+systemctl --user status gcit
+journalctl --user -u gcit -n 100
 ```
 
 For a non-default socket path, pass `--control-socket`. For user-scope
