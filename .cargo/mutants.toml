@@ -1,0 +1,19 @@
+test_tool = "nextest"
+profile = "mutants"
+copy_vcs = true
+minimum_test_timeout = 20.0
+
+# Skip daemon-runtime / CLI glue with low unit-test coverage —
+# mutations in these produce missed mutants not actionable
+# without full-daemon integration tests.
+exclude_globs = [
+  "src/bin/gcit.rs",
+  "src/cli/*.rs",
+  "src/flow/supervisor.rs",
+  "src/control/server.rs",
+  "src/control/client.rs",
+  "src/systemd/*.rs",
+  "src/log/*.rs",
+]
+
+exclude_re = ["impl Debug", "impl Display"]

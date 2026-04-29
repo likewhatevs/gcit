@@ -1,0 +1,60 @@
+# cargo-deny configuration.
+#
+# Rules covered:
+#   - advisories: RustSec advisory database; deny vulnerable crates
+#   - bans: explicit deny-list (currently empty) + multiple-versions
+#     policy. multiple-versions = "deny" so a duplicate major version
+#     surfaces as a hard error rather than silently inflating the dep
+#     tree.
+#   - sources: only crates.io; no git/path overrides.
+#   - licenses: GPL-2.0-only-compatible deps only.
+#
+# This file is read by the `audit` CI job. cargo-deny supports rule-
+# specific overrides via `[rule.*]` tables; we keep the defaults strict
+# and add narrow exemptions inline as the dep tree evolves.
+
+[advisories]
+# `db-path` is intentionally omitted: cargo-deny does NOT shell-expand
+# `~`, so a literal `"~/.cargo/advisory-db"` would resolve to a
+# directory named `~` under cwd. Falling back to cargo-deny's default
+# (under the user's CARGO_HOME) is the correct behaviour.
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[bans]
+# Duplicate major versions are a merge gate.
+multiple-versions = "deny"
+wildcards = "deny"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[licenses]
+# Cargo.toml declares license = "GPL-2.0-only" so dep licenses must be
+# GPL-2.0 compatible. The list below accepts every commonly-permissive
+# license that the FSF rates compatible with GPL-2.0 plus GPL-2.0
+# itself.
+unused-allowed-license = "allow"
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "GPL-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.93
+exceptions = []
