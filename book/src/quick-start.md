@@ -13,29 +13,9 @@ cargo build --release
 sudo install -m 0755 target/release/gcit /usr/local/bin/gcit
 ```
 
-## 2. Generate systemd units and a config skeleton
+## 2. Author a minimal config
 
-```sh
-sudo gcit install --system     # writes /etc/systemd/system + /etc/gcit
-gcit install --user            # writes XDG paths under $HOME
-```
-
-The install command is interactive: it walks the operator through each
-referenced credential, previews every file path it will create, and refuses
-to write without explicit confirmation. Pass `--non-interactive` for CI.
-
-After install, gcit prints the next-step systemd commands (e.g.
-`sudo systemctl enable --now gcit.socket gcit.service`).
-
-`gcit uninstall` reverses an install via the on-disk install manifest;
-files not in the manifest are never touched. Operator-modified files are
-detected by sha256 mismatch and the uninstall refuses to proceed without
-`--force`.
-
-## 3. Author a minimal config
-
-Place this at `/etc/gcit/config.toml` (system install) or
-`$XDG_CONFIG_HOME/gcit/config.toml` (user install):
+Create `/etc/gcit/config.toml`:
 
 ```toml
 [poll]
@@ -90,7 +70,7 @@ fire_on = ["run_complete"]
 > installer will switch the unit from `DynamicUser=yes` to `User=gcit` +
 > `Group=mail` automatically.
 
-## 4. Drop credentials
+## 3. Drop credentials
 
 Each `credential_id` referenced in the config needs a credential file at
 `<config_dir>/credentials/<credential_id>`. Mode `0600` is recommended;
@@ -117,6 +97,24 @@ See [Credential management](./credentials.md) for the full resolution chain
 (`$CREDENTIALS_DIRECTORY`, env var, file) and ownership rules per install
 scope.
 
+## 4. Install systemd units
+
+```sh
+sudo gcit install --system --config /etc/gcit/config.toml
+```
+
+The install command previews every file path it will create (`[exists]` /
+`[new]` per entry) and refuses to write without explicit confirmation.
+It copies the config, emits `gcit.service` and `gcit.socket`, and prints
+the next-step systemd commands. Pass `--non-interactive` for CI.
+
+For a user-scope install (no `local_mail` destinations):
+`gcit install --user --config path/to/config.toml`.
+
+`gcit uninstall` reverses an install via the on-disk install manifest;
+operator-modified files are detected by sha256 mismatch and the uninstall
+refuses to proceed without `--force`.
+
 ## 5. Validate
 
 ```sh
@@ -128,7 +126,7 @@ in one pass (rather than stopping at the first), and verifies that every
 credential id referenced by a flow can be resolved. See
 [Troubleshooting](./troubleshooting.md) for the three exit states.
 
-## 6. Start the daemon
+## 6. Start
 
 ```sh
 sudo systemctl daemon-reload
