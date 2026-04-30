@@ -9,7 +9,6 @@ minimum_test_timeout = 20.0
 exclude_globs = [
   "src/bin/gcit.rs",
   "src/cli/*.rs",
-  "src/flow/supervisor.rs",
   "src/control/server.rs",
   "src/control/client.rs",
   "src/systemd/*.rs",

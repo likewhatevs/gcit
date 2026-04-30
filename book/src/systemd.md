@@ -89,16 +89,19 @@ StateDirectory=gcit
 StateDirectoryMode=0700
 ConfigurationDirectory=gcit
 ConfigurationDirectoryMode=0750
-ReadWritePaths=/var/mail
+ReadWritePaths=/var/mail        # only when at least one local_mail destination is configured
 Restart=on-failure
 NotifyAccess=main
 TimeoutStopSec=360
 ```
 
-`ReadWritePaths=/var/mail` is unconditional — it is required only when
-`local_mail` is configured, but emitting it in both branches keeps the
-unit-rendering logic and the `systemd-analyze` baseline identical. The
-empty `CapabilityBoundingSet=` and `DeviceAllow=` clear the daemon's
+`ReadWritePaths=/var/mail` is gated on `has_local_mail` (true when at
+least one configured destination is `kind = "local_mail"`); a Discord-
+only install emits no `ReadWritePaths=/var/mail` line so
+`ProtectSystem=strict` is not unnecessarily relaxed for deployments
+that never write to `/var/mail`. Every other directive above is
+emitted byte-for-byte regardless of the user-model branch. The empty
+`CapabilityBoundingSet=` and `DeviceAllow=` clear the daemon's
 capability and device allow-lists; without these gcit would inherit
 systemd's defaults.
 
