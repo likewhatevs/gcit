@@ -106,7 +106,7 @@ impl control::Handler for ControlHandler {
             let notified_runs = st.map(|s| s.notified_runs.len()).unwrap_or(0);
             // `state` field: a coarse human label so cli/status.rs's
             // text renderer prints something useful. "running" if we
-            // have an entry in flow_handles AND no recent panic;
+            // have an entry in registry.handles AND no recent panic;
             // "errored" if the last_errors map carries an entry;
             // "starting" if neither.
             let label = match (errors.get(name), st) {
@@ -194,7 +194,7 @@ impl control::Handler for ControlHandler {
 
 /// Dispatch a control-channel command on the supervisor's main
 /// select! loop. Reload routes to `run_reload`; Trigger looks up the
-/// flow in `flow_handles` and either renders a dry-run payload OR
+/// flow in `registry.handles` and either renders a dry-run payload OR
 /// injects a synthetic TriggerSignal into the flow's dispatcher mpsc.
 pub(super) async fn handle_control_command(
     cmd: ControlCommand,

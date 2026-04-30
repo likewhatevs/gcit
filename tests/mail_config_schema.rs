@@ -4,11 +4,11 @@
 // The pipeline under test is `gcit::config::load_str(source, path)`
 // which:
 //   1. Parses TOML via serde into the raw, span-preserving schema
-//      (src/config/parse.rs::RawConfig + RawDestination). All raw
-//      structs carry `#[serde(deny_unknown_fields)]`; the destination
+//      (config::parse::RawConfig + RawDestination). All raw structs
+//      carry `#[serde(deny_unknown_fields)]`; the destination
 //      template carries the union of Discord + local_mail field
 //      names with the same deny.
-//   2. Walks the raw schema in `src/config/validate.rs::validate`,
+//   2. Walks the raw schema in `config::validate::validate`,
 //      dispatching on `[[flow.destination]] kind` to either
 //      `validate_local_mail` or `validate_discord_webhook`. Domain
 //      rules (user charset, max length, required fields) fire as
@@ -93,7 +93,8 @@ fn local_mail_destination_toml_round_trip() {
 #[test]
 fn local_mail_default_fire_on_is_run_complete() {
     // No `fire_on` key in the destination block → validator
-    // populates `vec![FireEvent::RunComplete]` (validate.rs:1057).
+    // populates `vec![FireEvent::RunComplete]` (validate_local_mail's
+    // fire_on default).
     //
     // Mutation target: the default is changed to `vec![]` (would
     // silently disable the destination) or to the full set
@@ -119,12 +120,13 @@ fn local_mail_default_fire_on_is_run_complete() {
 #[case::valid_with_underscore("admin_42", true)]
 // 32 chars: at the inclusive max; allowed.
 #[case::valid_max_length("a234567890123456789012345678901a", true)]
-// Empty string: caught by the "must be non-empty" branch
-// (validate.rs:1004-1013).
+// Empty string: caught by the "must be non-empty" branch in
+// validate_local_mail.
 #[case::invalid_empty("", false)]
 // 33 chars: one byte over MAX_LOCAL_MAIL_USER_LEN.
 #[case::invalid_too_long("a234567890123456789012345678901ab", false)]
-// Space: not in the [A-Za-z0-9_-] charset (validate.rs:1029-1045).
+// Space: not in the [A-Za-z0-9_-] charset enforced by
+// validate_local_mail.
 #[case::invalid_space("ops user", false)]
 // Slash: rejected by charset; also a path-traversal-shaped value.
 #[case::invalid_slash("ops/user", false)]
@@ -230,7 +232,7 @@ fn flow_with_mixed_destinations() {
 #[test]
 fn local_mail_template_optional_fields_default_to_none() {
     // No [flow.destination.template] block → both subject and body
-    // default to None. Per src/config/parse.rs:157-161:
+    // default to None. Per LocalMailTemplateConfig in config/parse.rs:
     //   pub struct LocalMailTemplateConfig {
     //     pub subject: Option<String>,
     //     pub body: Option<String>,
@@ -291,12 +293,13 @@ fn local_mail_kind_string_is_local_mail_snake_case() {
     // `kind = "local_mail"`; renaming the variant or removing
     // rename_all would break every existing config.
     //
-    // The validator dispatches on the literal kind string in
-    // src/config/validate.rs:799 (`"local_mail" => ...`). This test
-    // pins the input side: a TOML file with `kind = "local_mail"`
-    // resolves to Destination::LocalMail. A drift-detector for the
-    // kind string also lives at validate.rs:812-816 (the unknown-kind
-    // error message lists "discord_webhook, local_mail" verbatim).
+    // The validator dispatches on the literal kind string inside
+    // validate_destinations (`"local_mail" => ...`). This test pins
+    // the input side: a TOML file with `kind = "local_mail"` resolves
+    // to Destination::LocalMail. A drift-detector for the kind string
+    // also lives in the unknown-kind arm of validate_destinations
+    // (the unknown-kind error message lists "discord_webhook,
+    // local_mail" verbatim).
     let src = format!(
         "{PREAMBLE}\n\
          [[flow.destination]]\n\
@@ -330,7 +333,7 @@ fn local_mail_kind_string_is_local_mail_snake_case() {
 
 #[test]
 fn local_mail_unknown_field_rejected_by_deny_unknown_fields() {
-    // Per src/config/parse.rs:290-305, RawDestination has
+    // RawDestination in config/parse.rs has
     // #[serde(deny_unknown_fields)] and lists exactly:
     //   kind, credential_id, user, fire_on, template
     // Any other key (e.g., `spool_path`) trips deny at parse time;
@@ -364,8 +367,8 @@ fn local_mail_unknown_field_rejected_by_deny_unknown_fields() {
 
 #[test]
 fn local_mail_template_unknown_field_rejected() {
-    // Per src/config/parse.rs:311-330, RawDestinationTemplateConfig
-    // is the union of Discord + local_mail template fields with
+    // RawDestinationTemplateConfig in config/parse.rs is the union
+    // of Discord + local_mail template fields with
     // #[serde(deny_unknown_fields)]. `format` is not in the list, so
     // it's rejected at parse time.
     let src = format!(
@@ -391,11 +394,10 @@ fn local_mail_template_unknown_field_rejected() {
 
 #[test]
 fn local_mail_missing_user_field_rejected() {
-    // `user` is `Option<Spanned<String>>` in RawDestination
-    // (src/config/parse.rs:298-299) — parse layer accepts the
-    // missing field. The validator (src/config/validate.rs:991-1001)
-    // turns the absence into a ConfigError::Validate naming
-    // "destination.user is required for local_mail".
+    // `user` is `Option<Spanned<String>>` in RawDestination — parse
+    // layer accepts the missing field. validate_local_mail's
+    // missing-user arm turns the absence into a ConfigError::Validate
+    // naming "destination.user is required for local_mail".
     //
     // Note this differs from the original stub which expected
     // ConfigError::Parse — the parse-layer Option means missing

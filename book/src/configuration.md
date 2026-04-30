@@ -40,7 +40,7 @@ Poll defaults applied to every flow unless the flow overrides them under
 | `source_interval` | humantime duration | inclusive `[15s, 24h]` | unset; resolved per strategy (60s for GitHub API and grokmirror, 5m for ls-remote) |
 | `job_interval` | humantime duration | inclusive `[15s, 24h]` | `30s` |
 | `jitter` | float | inclusive `[0.0, 0.5]` | `0.1` |
-| `cooldown` | humantime duration | `5m` | `0s` disables throttling; non-zero bounded `[15s, 24h]`. Minimum time between dispatches per flow. |
+| `cooldown` | humantime duration | `0s` disables throttling; non-zero bounded `[15s, 24h]` | `5m` |
 
 Effective interval has a 15-second floor after jitter is applied:
 `interval = base * (1 + sample * jitter)` where `sample` is uniform in
@@ -122,8 +122,8 @@ selects the variant.
 | field | type | required | notes |
 |---|---|---|---|
 | `kind` | string | yes | `"discord_webhook"` |
-| `credential_id` | string | yes | Discord webhook URL stored as a credential — host must be `discord.com` or `discordapp.com` |
-| `fire_on` | array of `FireEvent` | yes | duplicates rejected at config load — one error per duplicate |
+| `credential_id` | string | yes | Discord webhook URL stored as a credential — host must be one of `discord.com`, `discordapp.com`, `ptb.discord.com`, or `canary.discord.com` |
+| `fire_on` | array of `FireEvent` | no, default `["run_complete"]` | duplicates rejected at config load — one error per duplicate |
 | `template` | inline table | no | see [Templates](#templates) |
 
 #### `kind = "local_mail"`
@@ -132,7 +132,7 @@ selects the variant.
 |---|---|---|---|
 | `kind` | string | yes | `"local_mail"` |
 | `user` | string | yes | local Unix user; charset `[a-zA-Z0-9_-]+`, 1..=32 chars; the daemon writes to `/var/mail/<user>` |
-| `fire_on` | array of `FireEvent` | yes | duplicates rejected at config load |
+| `fire_on` | array of `FireEvent` | no, default `["run_complete"]` | duplicates rejected at config load |
 | `template` | inline table | no | see [Templates](#templates) |
 
 `local_mail` requires a system-scope install (`gcit install --system`);

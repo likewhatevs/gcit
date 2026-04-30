@@ -212,13 +212,13 @@ fn write_config(dir: &std::path::Path, body: &str) -> PathBuf {
 ///      asserted via the post-shutdown `state.json` existence + non-zero
 ///      length.
 ///
-/// The poll-cadence floor (`MIN_INTERVAL = 15s` per
-/// `src/config/validate.rs`) plus the daemon's lock acquisition cost
-/// dominate the wall-clock; we send SIGTERM after a short grace
-/// window rather than waiting on virtual-time advance, because the
-/// supervisor uses `tokio::signal::unix::signal(...)` which is
-/// driven by OS-level signal delivery (not tokio time), and that
-/// delivery is what this test uses to assert clean shutdown.
+/// The poll-cadence floor (`MIN_INTERVAL = 15s` per `validate::MIN_INTERVAL`)
+/// plus the daemon's lock acquisition cost dominate the wall-clock; we
+/// send SIGTERM after a short grace window rather than waiting on
+/// virtual-time advance, because the supervisor uses
+/// `tokio::signal::unix::signal(...)` which is driven by OS-level signal
+/// delivery (not tokio time), and that delivery is what this test uses
+/// to assert clean shutdown.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial_test::serial]
 async fn supervisor_run_with_factories_boots_and_shuts_down_cleanly() {
@@ -235,9 +235,9 @@ async fn supervisor_run_with_factories_boots_and_shuts_down_cleanly() {
     // Provide a dummy github_pat credential file so the credential
     // pool's resolve_secret succeeds (otherwise spawn_flow records a
     // `credential` last_error and skips the rest of the wiring).
-    // The probe at config/credential_file.rs::probe rejects mode bits
-    // outside 0o077, so the file MUST be chmod 0o600 — the default
-    // umask-derived 0o644 fails the invariant.
+    // The credential_file::probe rejects mode bits outside 0o077, so
+    // the file MUST be chmod 0o600 — the default umask-derived 0o644
+    // fails the invariant.
     let pat_path = creds_dir.path().join("github_pat");
     std::fs::write(&pat_path, "github_pat_dummy_for_test").expect("write credential file");
     {
@@ -775,9 +775,9 @@ async fn supervisor_respawns_panicked_flow_and_clears_last_error() {
 
     // Advance past gen-2's first source_interval sleep so the
     // ScriptedPollExecutor's poll_cycle fires and the post-respawn
-    // last_error clear path runs. The poll loop sleeps
-    // source_interval BEFORE the first cycle (poll.rs:240-246), so
-    // we need to release that sleep before the executor returns
+    // last_error clear path runs. The poll loop in
+    // run_with_executor sleeps source_interval BEFORE the first cycle,
+    // so we need to release that sleep before the executor returns
     // PollOutcome::Refreshed and the loop hits the
     // `last_errors.lock().await.remove(...)` clear.
     let source_interval = Duration::from_secs(15);
@@ -1355,11 +1355,11 @@ async fn supervisor_sighup_reload_restarts_non_url_change_via_restart_arm() {
 ///
 ///   1. `cmd_rx.recv()` arm of the supervisor's main select! loop
 ///      fires when a Trigger request arrives over the control socket
-///      (run.rs:329-339 dispatches via `handle_control_command`).
+///      (the run loop dispatches via `handle_control_command`).
 ///   2. `handle_control_command` routes the Trigger {dry_run:true}
 ///      command into `run_trigger`, which calls
-///      `render_dry_run_payload` (control.rs:299) and replies with
-///      the rendered JSON over the oneshot reply channel.
+///      `render_dry_run_payload` and replies with the rendered JSON
+///      over the oneshot reply channel.
 ///   3. The wire-protocol `Response::Ok { data, .. }` carries the
 ///      payload object whose `flow`, `dry_run:true`, `repo`,
 ///      `workflow`, and `gcit_run_id` fields are populated from the
@@ -1427,9 +1427,8 @@ async fn supervisor_control_command_trigger_dry_run_returns_rendered_payload() {
 
     // Connect to the live control socket and send a Trigger
     // {dry_run:true} request. The supervisor's cmd_rx arm picks it up
-    // from the control_handler's mpsc (control.rs:188-229), routes
-    // through run_trigger -> render_dry_run_payload (control.rs:262),
-    // and replies with the rendered JSON.
+    // from the control_handler's mpsc, routes through run_trigger ->
+    // render_dry_run_payload, and replies with the rendered JSON.
     let mut client = gcit::control::Client::connect(&control_socket)
         .await
         .expect("control socket must accept connection");
@@ -1456,8 +1455,8 @@ async fn supervisor_control_command_trigger_dry_run_returns_rendered_payload() {
         "response id must echo the request id",
     );
 
-    // Pin every field render_dry_run_payload emits (control.rs:337-345)
-    // so a regression that drops or renames any of them surfaces here.
+    // Pin every field render_dry_run_payload emits so a regression
+    // that drops or renames any of them surfaces here.
     assert_eq!(
         data["flow"].as_str(),
         Some("flow-a"),
@@ -1488,7 +1487,7 @@ async fn supervisor_control_command_trigger_dry_run_returns_rendered_payload() {
         .expect("gcit_run_id must be a string");
     assert!(
         Uuid::parse_str(run_id_str).is_ok(),
-        "gcit_run_id must be a parseable UUID (control.rs:307 uses Uuid::new_v4); got: {run_id_str}",
+        "gcit_run_id must be a parseable UUID (render_dry_run_payload uses Uuid::new_v4); got: {run_id_str}",
     );
     // rendered_inputs is the auto-injected payload — must at least
     // carry the gcit_run_id key (build_inputs_payload always injects
@@ -1524,13 +1523,14 @@ async fn supervisor_control_command_trigger_dry_run_returns_rendered_payload() {
 }
 
 /// Drive the SIGINT arm of the supervisor select! loop. SIGINT
-/// (ctrl-C) shares the shutdown branch with SIGTERM (run.rs:325-328)
-/// — both signal handlers route into the same `break` path that
-/// triggers root_cancel.cancel + flow drain + writer drain.
+/// (ctrl-C) shares the shutdown branch with SIGTERM — both signal
+/// handlers route into the same `break` path that triggers
+/// root_cancel.cancel + flow drain + writer drain.
 ///
 /// Pinning SIGINT alongside SIGTERM in the harness:
 ///   1. Proves the SIGINT signal handler is installed at boot
-///      (signal::unix::signal(SignalKind::interrupt) at run.rs:296).
+///      (signal::unix::signal(SignalKind::interrupt) inside
+///      run_with_factories).
 ///   2. Proves SIGINT routes into the shutdown branch — a regression
 ///      that mis-wired the SIGINT arm to e.g. reload would surface as
 ///      the daemon never returning from run_with_factories within
@@ -1619,11 +1619,11 @@ async fn supervisor_sigint_routes_to_shutdown_branch() {
     drop(fixture);
 }
 
-/// Config with two flows that share the same `name` — the validator
-/// at config/validate.rs:308-319 detects duplicate names and emits a
-/// `ConfigError::Validate` carrying every line number. run_with_factories
-/// returns `Err(DaemonError::Config(errs))` from run.rs:115 BEFORE any
-/// flow spawn, lock acquire, or signal handler install.
+/// Config with two flows that share the same `name` — the
+/// duplicate-name detection inside config::validate emits a
+/// `ConfigError::Validate` carrying every line number.
+/// run_with_factories returns `Err(DaemonError::Config(errs))` BEFORE
+/// any flow spawn, lock acquire, or signal handler install.
 const TWO_FLOWS_DUPLICATE_NAME_CONFIG: &str = r#"
 [poll]
 source_interval = "15s"
@@ -1664,11 +1664,10 @@ credential_id = "github_pat"
 
 /// Drive the boot-time fatal-config arm of `run_with_factories`. Pins:
 ///
-///   1. Duplicate flow names are caught by the validator at
-///      config/validate.rs:308-319 and surfaced via
-///      crate::config::load returning Err(Vec<ConfigError>).
-///   2. run_with_factories at run.rs:113-116 maps the parse failure
-///      onto Err(DaemonError::Config(errs)) and returns BEFORE the
+///   1. Duplicate flow names are caught by config::validate and
+///      surfaced via crate::config::load returning Err(Vec<ConfigError>).
+///   2. run_with_factories maps the parse failure onto
+///      Err(DaemonError::Config(errs)) and returns BEFORE the
 ///      lock-acquire, state-load, factory-spawn, or signal-handler
 ///      installation steps run.
 ///   3. The factory closures hold panic-if-invoked guards so any
@@ -1687,7 +1686,7 @@ async fn supervisor_run_with_factories_returns_daemon_error_config_on_duplicate_
     let control_socket = fixture.runtime_dir.path().join("control.sock");
 
     // Factories panic if invoked. They MUST NOT be — the boot path
-    // exits at config-load (run.rs:115) before spawn_initial_flows.
+    // exits at the config-load Err arm before spawn_initial_flows.
     let poll_factory: PollTaskFactory = Arc::new(|_, _, _, _, _, _| {
         panic!(
             "poll factory invoked unexpectedly: \
@@ -1712,7 +1711,7 @@ async fn supervisor_run_with_factories_returns_daemon_error_config_on_duplicate_
 
     // Pin the variant + the validate-error message body. ConfigError's
     // Display includes "duplicate flow name; N occurrences" for
-    // duplicate-name diagnoses (validate.rs:316).
+    // duplicate-name diagnoses (emitted by validate_flow_name).
     let errs = match err {
         gcit::flow::supervisor::DaemonError::Config(errs) => errs,
         other => panic!(
@@ -1745,7 +1744,7 @@ async fn supervisor_run_with_factories_returns_daemon_error_config_on_duplicate_
 ///      creates a distinct OFD, its `try_write()` issues
 ///      `flock(LOCK_EX | LOCK_NB)`, and the kernel returns EWOULDBLOCK
 ///      because the test holds the lock on its own fd.
-///   2. run.rs:138-143 maps EWOULDBLOCK onto
+///   2. run_with_factories maps EWOULDBLOCK onto
 ///      `Err(DaemonError::State(StateError::LockHeld { path }))` and
 ///      returns BEFORE state-load, factory-spawn, or signal-handler
 ///      installation steps run.
@@ -1761,11 +1760,10 @@ async fn supervisor_run_with_factories_returns_daemon_error_state_lock_held_when
 
     // Pre-acquire the flock on $RUNTIME_DIRECTORY/gcit.lock from a
     // separate file descriptor. fd_lock::RwLock::try_write issues
-    // flock(LOCK_EX | LOCK_NB) on the underlying fd
-    // (fd_lock-4.0.4/src/sys/unix/rw_lock.rs:25); flock locks attach
-    // to OFDs (open file descriptions), so two distinct open() calls
-    // in the same process yield two OFDs that mutually exclude each
-    // other.
+    // flock(LOCK_EX | LOCK_NB) on the underlying fd; flock locks
+    // attach to OFDs (open file descriptions), so two distinct open()
+    // calls in the same process yield two OFDs that mutually exclude
+    // each other.
     let lock_path = fixture.runtime_dir.path().join("gcit.lock");
     // Materialize the parent directory (state::open_instance_lock_file
     // creates it on the production path; we replicate here so our
@@ -1815,7 +1813,7 @@ async fn supervisor_run_with_factories_returns_daemon_error_state_lock_held_when
             let rendered = format!("{state_err}");
             assert!(
                 rendered.contains("another gcit instance is running"),
-                "LockHeld Display must surface the canonical 'another gcit instance is running' message (state/mod.rs:97-99); got: {rendered}",
+                "LockHeld Display must surface the canonical 'another gcit instance is running' message; got: {rendered}",
             );
             assert!(
                 rendered.contains(&lock_path.display().to_string()),

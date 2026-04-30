@@ -525,8 +525,8 @@ async fn cancel_during_execute_propagates_through_executor_seam() {
         "kind prefix must be `dispatch:`; got: {err}",
     );
     // GithubErrorKind::Cancelled's Display body opens with
-    // "dispatch cancelled by supervisor" (src/github/error.rs:142).
-    // Pin the leading phrase so a wording drift surfaces here.
+    // "dispatch cancelled by supervisor". Pin the leading phrase so
+    // a wording drift surfaces here.
     assert!(
         err.contains("cancelled by supervisor"),
         "Cancelled Display must surface in the error body; got: {err}",
@@ -550,8 +550,8 @@ async fn cancel_during_execute_propagates_through_executor_seam() {
 
 #[tokio::test]
 async fn run_start_fan_out_isolates_failing_notifier_from_succeeding_one() {
-    // The dispatcher's on_run_start fan-out (call site at
-    // src/flow/dispatcher.rs:781) spawns one independent tokio::task
+    // The dispatcher's on_run_start fan-out (the spawn loop in
+    // handle_trigger_with_executor) spawns one independent tokio::task
     // per notifier and drops the JoinHandles (fire-and-forget). One
     // notifier returning Err must NOT prevent the others from being
     // invoked: the supervisor's failure-isolation invariant says "a

@@ -1,7 +1,6 @@
 // Logging initialization.
 //
-// Logging is initialized as the first step of `run()`. The control
-// channel accepts a log filter peer pid/uid. We use
+// Logging is initialized as the first step of `run()`. We use
 // `tracing-subscriber` for the registry/filter and `tracing-journald`
 // for the structured-journal layer; the fallback to a stderr fmt
 // layer is the canonical pattern documented in `tracing-journald`'s

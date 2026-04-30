@@ -20,9 +20,12 @@
 // stdout (operators routinely pipe it into `jq` or compare against
 // expected text in CI).
 //
-// The probe context currently uses empty strings for every
-// namespaced leaf — matches `gcit check` behaviour. Enriching the
-// probe with realistic values is a follow-up task.
+// The probe context (built by `config::validate::probe_context`)
+// supplies realistic placeholder values for every namespaced leaf
+// (e.g. `flow.name = "linux-mainline-ci"`, a 40-char hex `source.sha`,
+// a u64 `action.run_id`) so strict-mode rendering catches typed-shape
+// bugs as well as missing fields. Matches the probe `gcit check` runs
+// at config load.
 
 use std::path::Path;
 use std::process::ExitCode;

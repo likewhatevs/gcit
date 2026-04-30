@@ -6,16 +6,15 @@
 // owner, repo, ref_name)`. The function dispatches to octocrab's
 // `repos(owner, repo).get_ref(...)` and classifies any failure into
 // `GithubError::{Permanent, Transient, InvalidRef}`. 404 short-
-// circuits to `Ok(PollOutcome::UnbornRef)` in
-// src/git/github_api.rs::poll.
+// circuits to `Ok(PollOutcome::UnbornRef)` inside github_api::poll.
 //
 // The wiremock setup intercepts the GET on
 //   /repos/{owner}/{repo}/git/ref/{ref_path}
 // where `ref_path` strips the leading "refs/" so e.g.
 // `refs/heads/master` becomes `heads/master`. Tests pin the route
 // shape and the response-classification arms at the integration-test
-// boundary; the in-module unit tests in src/git/github_api.rs::tests
-// already cover classify_status for every documented status code.
+// boundary; the in-module unit tests in github_api::tests already
+// cover classify_status for every documented status code.
 
 use octocrab::Octocrab;
 use serde_json::json;
@@ -74,8 +73,8 @@ async fn get_ref_returns_sha_for_existing_branch() {
 #[tokio::test]
 async fn get_ref_returns_sha_for_existing_tag() {
     // gcit accepts both refs/heads/* and refs/tags/* per the
-    // ref_to_reference branch table at src/git/github_api.rs:62-86.
-    // The path component for a tag becomes `tags/<name>`.
+    // ref_to_reference branch table. The path component for a tag
+    // becomes `tags/<name>`.
     let mock = MockServer::start().await;
     let sha = "b".repeat(40);
     Mock::given(method("GET"))
@@ -108,10 +107,9 @@ async fn get_ref_returns_sha_for_existing_tag() {
 
 #[tokio::test]
 async fn get_ref_404_returns_unborn_ref_outcome() {
-    // Per src/git/github_api.rs::poll lines 109-116: a 404 from
-    // GitHub is short-circuited to `Ok(PollOutcome::UnbornRef)` so
-    // the caller logs a WARN and keeps polling on cadence rather
-    // than driving the backoff path.
+    // github_api::poll short-circuits a 404 from GitHub to
+    // `Ok(PollOutcome::UnbornRef)` so the caller logs a WARN and
+    // keeps polling on cadence rather than driving the backoff path.
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/repos/owner/repo/git/ref/heads/never-existed"))
@@ -133,8 +131,8 @@ async fn get_ref_404_returns_unborn_ref_outcome() {
 #[tokio::test]
 async fn get_ref_5xx_returns_transient_error() {
     // GitHub's 5xx responses sometimes carry a JSON body shaped like
-    // its standard `GitHubError`, sometimes not. The classifier
-    // (src/git/github_api.rs::classify_error) handles BOTH:
+    // its standard `GitHubError`, sometimes not. classify_error
+    // handles BOTH:
     //   - octocrab returns Error::GitHub when the body fits → classify_status
     //     hits the `status.is_server_error()` arm → Transient.
     //   - octocrab returns Error::Json / Error::Serde / Error::Other
@@ -293,10 +291,9 @@ async fn get_ref_path_strips_refs_prefix() {
 #[tokio::test]
 async fn get_ref_invalid_namespace_returns_invalid_ref_error() {
     // refs/notes/* and refs/pull/* are not supported by github's
-    // `get_ref` endpoint; src/git/github_api.rs::ref_to_reference
-    // rejects them at the Reference-construction step before any
-    // network round-trip. The mock is mounted but should NOT be
-    // hit (.expect(0)).
+    // `get_ref` endpoint; ref_to_reference rejects them at the
+    // Reference-construction step before any network round-trip. The
+    // mock is mounted but should NOT be hit (.expect(0)).
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(404))

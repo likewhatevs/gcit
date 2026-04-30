@@ -382,10 +382,8 @@ pub(crate) fn validate(
 /// Production callers run `validate` first (structural), then
 /// `validate_spool_writability` against the resolved `Config`:
 ///   * `cli::check` collects the host-state errors alongside its
-///     credential probes — gcit check and daemon startup share the
-///     same validator.
-///   * Daemon startup runs the same probe with soft (warn-only)
-///     semantics per `ValidateContext::DaemonStart`.
+///     credential probes — operators run `gcit check` to surface
+///     spool problems before they reach the daemon.
 ///
 /// `spool_root = None` resolves to `mail::DEFAULT_SPOOL_DIR`
 /// (`/var/mail` in production). Tests pass `Some(<tempdir>)` so
@@ -1862,9 +1860,9 @@ mod tests {
 
     #[test]
     fn byte_offset_to_line_zero_offset_is_line_one() {
-        // Per src/config/validate.rs:93-103: offsets 0..first_newline
-        // map to line 1. The function counts `\n` bytes in [0..offset).
-        // An offset of 0 has no bytes to count, so it returns 1.
+        // Per byte_offset_to_line: offsets 0..first_newline map to
+        // line 1. The function counts `\n` bytes in [0..offset). An
+        // offset of 0 has no bytes to count, so it returns 1.
         assert_eq!(byte_offset_to_line("first\nsecond\n", 0), 1);
     }
 
@@ -1887,7 +1885,7 @@ mod tests {
 
     #[test]
     fn byte_offset_to_line_clamps_offset_beyond_source_length() {
-        // src/config/validate.rs:95: `let limit = offset.min(bytes.len());`
+        // byte_offset_to_line's `let limit = offset.min(bytes.len());`
         // ensures an out-of-range offset clamps to the last byte rather
         // than panicking. Three lines = two `\n` bytes; an offset past
         // the end still counts both newlines and returns line 3.
@@ -1917,10 +1915,10 @@ mod tests {
 
     #[test]
     fn case_confusable_hint_uppercase_m_returns_months_warning() {
-        // src/config/validate.rs:1450-1458 emits a months hint when the
-        // input contains uppercase 'M'. Operators frequently confuse
-        // 'M' (months) with 'm' (minutes) because the glyphs are
-        // visually indistinguishable in many monospace fonts.
+        // case_confusable_hint emits a months hint when the input
+        // contains uppercase 'M'. Operators frequently confuse 'M'
+        // (months) with 'm' (minutes) because the glyphs are visually
+        // indistinguishable in many monospace fonts.
         let hint = case_confusable_hint("5M");
         assert!(
             hint.contains("'M' means months"),
@@ -1952,7 +1950,8 @@ mod tests {
     fn case_confusable_hint_lowercase_only_returns_empty() {
         // No confusable uppercase character → no hint. The function
         // returns the empty string so callers can unconditionally
-        // append it to format strings (line 1407 of validate.rs).
+        // append it to format strings (parse_bounded_duration's hint
+        // append).
         assert_eq!(case_confusable_hint("15s"), "");
         assert_eq!(case_confusable_hint("5m"), "");
         assert_eq!(case_confusable_hint("2w"), "");
@@ -1961,8 +1960,8 @@ mod tests {
 
     #[test]
     fn case_confusable_hint_uppercase_m_takes_precedence_over_uppercase_w() {
-        // The function checks 'M' before 'W' (line 1451 vs 1453). An
-        // input containing both surfaces the months hint, not the
+        // The function checks 'M' before 'W' inside case_confusable_hint.
+        // An input containing both surfaces the months hint, not the
         // weeks-not-a-unit one. Pinned so a future swap of the order
         // would surface as a test failure rather than silently
         // changing operator-facing output.
@@ -1979,12 +1978,12 @@ mod tests {
 
     #[test]
     fn probe_context_carries_every_documented_namespace() {
-        // src/config/validate.rs:80-86 names the five top-level
-        // namespaces (flow, source, action, run, gcit). probe_context
-        // must populate every one of them so that compile_template_field
-        // can render any documented `namespace.field` reference. A
-        // missing namespace would silently break a strict-mode render
-        // pass — surfaceable here as a top-level key absence.
+        // TEMPLATE_NAMESPACES names the five top-level namespaces (flow,
+        // source, action, run, gcit). probe_context must populate every
+        // one of them so that compile_template_field can render any
+        // documented `namespace.field` reference. A missing namespace
+        // would silently break a strict-mode render pass — surfaceable
+        // here as a top-level key absence.
         let ctx = probe_context();
         let obj = ctx.as_object().expect("probe context must be a JSON object");
         for ns in TEMPLATE_NAMESPACES {
@@ -1999,11 +1998,10 @@ mod tests {
 
     #[test]
     fn probe_context_source_sha_is_40_hex_chars() {
-        // src/config/validate.rs:1764: source.sha is "a".repeat(40)
-        // because runtime SHAs are 40 hex chars. A regression that
-        // emitted a short value would slip past strict-mode rendering
-        // but would NOT exercise template helpers that assume full sha
-        // length.
+        // probe_context populates source.sha as "a".repeat(40) because
+        // runtime SHAs are 40 hex chars. A regression that emitted a
+        // short value would slip past strict-mode rendering but would
+        // NOT exercise template helpers that assume full sha length.
         let ctx = probe_context();
         let sha = ctx
             .get("source")
@@ -2015,11 +2013,11 @@ mod tests {
 
     #[test]
     fn probe_context_action_run_id_is_unsigned_integer() {
-        // Per src/config/validate.rs:1770 + the comment at 1752-1754,
-        // action.run_id is u64 at runtime. The probe value must be a
-        // JSON integer so handlebars helpers expecting a number still
-        // see one (a string-typed probe value would surface a
-        // false-positive helper failure at render time).
+        // Per probe_context's namespace doc comment, action.run_id is
+        // u64 at runtime. The probe value must be a JSON integer so
+        // handlebars helpers expecting a number still see one (a
+        // string-typed probe value would surface a false-positive
+        // helper failure at render time).
         let ctx = probe_context();
         let run_id = ctx
             .get("action")
@@ -2049,10 +2047,10 @@ mod tests {
 
     #[test]
     fn find_bare_name_returns_none_for_slashed_path() {
-        // Line 1707 also accepts paths containing '/' because handlebars
-        // supports slashed path syntax as an alias for dotted (rare but
-        // handled). A slashed `flow/name` is treated as multi-segment
-        // and passes the bare-name check.
+        // find_bare_name also accepts paths containing '/' because
+        // handlebars supports slashed path syntax as an alias for
+        // dotted (rare but handled). A slashed `flow/name` is treated
+        // as multi-segment and passes the bare-name check.
         let tpl = compile_template("{{flow/name}}");
         assert_eq!(find_bare_name(&tpl), None);
     }
@@ -2071,9 +2069,9 @@ mod tests {
     fn find_bare_name_returns_some_for_single_segment_unknown_name() {
         // `{{gcit_run_id}}` (vs the correct `{{gcit.run_id}}`) is a
         // single-segment reference that does NOT match any namespace.
-        // It still must be rejected (line 1707 only checks for '.'/
-        // '/' presence — single-segment names of any kind fall through
-        // to the rejection arm).
+        // It still must be rejected (find_bare_name only checks for
+        // '.'/'/' presence — single-segment names of any kind fall
+        // through to the rejection arm).
         let tpl = compile_template("{{gcit_run_id}}");
         assert_eq!(find_bare_name(&tpl), Some("gcit_run_id".to_string()));
     }
@@ -2090,9 +2088,9 @@ mod tests {
     #[test]
     fn find_bare_name_returns_first_match_when_template_has_multiple_bare_references() {
         // The function scans elements in source order and returns
-        // Some(name) on the first hit (line 1708 `return Some(name)`).
-        // Pin first-match semantics so a regression that returns the
-        // last match (or all matches) would fail.
+        // Some(name) on the first hit (find_bare_name's `return
+        // Some(name)`). Pin first-match semantics so a regression that
+        // returns the last match (or all matches) would fail.
         let tpl = compile_template("{{flow}} and {{source}}");
         // flow is first in order; the function must surface it before
         // even considering source.
@@ -2101,14 +2099,13 @@ mod tests {
 
     #[test]
     fn find_bare_name_block_helper_with_single_segment_name_returns_helper_name() {
-        // src/config/validate.rs:1707-1708 — the single-segment guard
-        // fires for the OUTER helper name first, so a `{{#if ...}}`
-        // block surfaces "if" itself before any recursion into the
-        // body. Pin the first-match-wins semantic: even though the
-        // body contains `{{flow}}` (also bare), the outer "if" wins.
-        // This matches the function's contract: any single-segment
-        // reference, helper or otherwise, is rejected at the first
-        // hit.
+        // find_bare_name's single-segment guard fires for the OUTER
+        // helper name first, so a `{{#if ...}}` block surfaces "if"
+        // itself before any recursion into the body. Pin the
+        // first-match-wins semantic: even though the body contains
+        // `{{flow}}` (also bare), the outer "if" wins. This matches
+        // the function's contract: any single-segment reference,
+        // helper or otherwise, is rejected at the first hit.
         let tpl = compile_template("{{#if action.repo}}{{flow}}{{/if}}");
         // "if" is a single-segment helper name; find_bare_name returns
         // it before walking the body.
@@ -2121,8 +2118,8 @@ mod tests {
 
     #[test]
     fn namespace_form_examples_lists_every_documented_namespace() {
-        // src/config/validate.rs:1728-1734 joins every namespace with
-        // the ".<field>" suffix. The function is the operator-facing
+        // namespace_form_examples joins every namespace with the
+        // ".<field>" suffix. The function is the operator-facing
         // suggestion in compile_template_field's bare-name error so
         // every documented namespace must appear; pin so a refactor
         // that drops a namespace silently surfaces here.
@@ -2134,7 +2131,7 @@ mod tests {
                 "namespace_form_examples must mention {needle:?}; got: {s}",
             );
         }
-        // Comma-delimited per the join(", ") at line 1733.
+        // Comma-delimited per the join(", ") inside namespace_form_examples.
         assert!(s.contains(", "), "must use \", \" separator; got: {s}");
     }
 
@@ -2144,12 +2141,12 @@ mod tests {
 
     #[test]
     fn validate_err_empty_lines_vec_falls_back_to_line_one() {
-        // src/config/validate.rs:210 — empty `lines` vec produces
-        // `vec![1]`. Pin the editor-jump-target invariant: a
-        // ConfigError::Validate with an empty lines vec would render
-        // as `path: ...` which most editors do not parse as a jump
-        // target. The validator uses empty Vec for "missing content"
-        // errors that have no specific source span.
+        // validate_err normalizes an empty `lines` vec to `vec![1]`.
+        // Pin the editor-jump-target invariant: a ConfigError::Validate
+        // with an empty lines vec would render as `path: ...` which
+        // most editors do not parse as a jump target. The validator
+        // uses empty Vec for "missing content" errors that have no
+        // specific source span.
         let err = validate_err(
             std::path::Path::new("inline"),
             vec![],
@@ -2199,11 +2196,11 @@ mod tests {
 
     #[test]
     fn probe_context_run_status_and_conclusion_are_strings() {
-        // src/config/validate.rs:1774-1777 — `run.status` and
-        // `run.conclusion` are JSON strings ("completed" / "success").
-        // Templates that apply a string-only operation (truncate,
-        // case-fold) must see a string at probe time so a runtime
-        // type mismatch surfaces at config load.
+        // probe_context populates `run.status` and `run.conclusion`
+        // as JSON strings ("completed" / "success"). Templates that
+        // apply a string-only operation (truncate, case-fold) must
+        // see a string at probe time so a runtime type mismatch
+        // surfaces at config load.
         let ctx = probe_context();
         let status = ctx.get("run").and_then(|r| r.get("status")).unwrap();
         assert!(status.is_string(), "run.status must be a string");
@@ -2213,11 +2210,11 @@ mod tests {
 
     #[test]
     fn probe_context_action_dispatched_at_is_rfc3339_string() {
-        // src/config/validate.rs:1772 — `action.dispatched_at` is a
-        // JSON string in RFC3339 form. Templates that use it inside a
-        // helper expecting a date-shaped string must see one at probe
-        // time. The doc comment at validate.rs:1746-1751 commits to
-        // type-faithful values; pin the RFC3339 'T' separator.
+        // probe_context populates `action.dispatched_at` as a JSON
+        // string in RFC3339 form. Templates that use it inside a helper
+        // expecting a date-shaped string must see one at probe time.
+        // The probe_context doc comment commits to type-faithful
+        // values; pin the RFC3339 'T' separator.
         let ctx = probe_context();
         let v = ctx
             .get("action")
@@ -2232,7 +2229,7 @@ mod tests {
 
     #[test]
     fn probe_context_gcit_run_id_is_uuid_shaped() {
-        // src/config/validate.rs:1779 — `gcit.run_id` is the nil UUID
+        // probe_context populates `gcit.run_id` as the nil UUID
         // literal "00000000-0000-0000-0000-000000000000". Pin the
         // 36-char + four-hyphen shape so a regression to a non-UUID
         // string would fail to drive the runtime check.

@@ -131,10 +131,14 @@ carries:
 | `label` | `run-start`, `run-complete`, `job-complete` |
 | `job_id` | only on per-job records |
 
-`Sent` records also carry an opaque `receipt` string. For Discord this is
-a synthetic `"sent"` token (or a message id when the webhook is invoked
-with `wait=true`); for mbox it is the absolute spool path that was
-appended to.
+`Sent` records also carry an opaque `receipt` string identifying the
+delivery. For Discord this is a synthetic `webhook:{id}` token derived
+from the parsed webhook URL's id segment — gcit does not request a
+message-body reply from Discord (no `?wait=true`), so a real message id
+is never available. For local mail the receipt is `file:{path}` — the
+absolute spool path that was appended to, prefixed with `file:` so a
+journald reader can `grep '^file:'` to find every successful mbox
+delivery.
 
 `Skipped` records carry a debug-formatted `reason`:
 

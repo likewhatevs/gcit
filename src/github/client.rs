@@ -33,7 +33,6 @@
 // Tests inject `base_uri` to point at wiremock; production paths use
 // the default `https://api.github.com`.
 
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -66,7 +65,7 @@ pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// response returned from `Octocrab::_get` (which the correlator
 /// and monitor paths reach through `classified_get`). The limit
 /// triggers `LengthLimitError` mid-stream as soon as the cap is
-/// crossed; the helper maps that to `GithubErrorKind::Unknown`.
+/// crossed; the helper maps that to `GithubErrorKind::BodyTooLarge`.
 ///
 /// Coverage gaps (documented for the operator):
 ///   - The dispatcher's `_post` returns 204 No Content, so the
@@ -128,8 +127,8 @@ pub enum ClientBuildError {
 }
 
 /// One GitHub client per credential. Cheap to clone via `Arc` —
-/// inside, the `octocrab::Octocrab` is itself a wrapper around an
-/// `Arc<...>`, so cloning the client is two refcount increments.
+/// `Client` wraps a single `Arc<Inner>`, so cloning is one
+/// `Arc::clone` (one refcount increment).
 ///
 /// Response body sizing: octocrab itself does not expose a body-cap
 /// builder knob, so gcit enforces `RESPONSE_BODY_LIMIT` (16 MiB) on
@@ -184,47 +183,6 @@ impl Client {
     }
 }
 
-/// Run an octocrab API future with the client's per-request timeout
-/// and classify any failure into `GithubErrorKind`. The dispatch /
-/// monitor / correlator paths share this wrapper rather than each
-/// hand-rolling timeout+match — pure DRY.
-///
-/// On `Ok(T)` the inner future's value is returned. On `Err(octocrab)`
-/// the error is classified via `super::error::classify`. On timeout
-/// the configured deadline is converted via `super::error::timeout_error`.
-///
-/// `repo`/`workflow` are passed through to `classify` so 404s carry
-/// the right paths in the error message; the next_page paths pass
-/// "" because pagination links don't carry workflow context (the
-/// classifier handles empty strings gracefully — they appear in the
-/// 404 message, but operators see the surrounding log context).
-pub async fn classified_request<T, F>(
-    client: &Client,
-    repo: &str,
-    workflow: &str,
-    fut: F,
-) -> Result<T, GithubErrorKind>
-where
-    F: Future<Output = Result<T, octocrab::Error>>,
-{
-    match timeout(client.request_timeout(), fut).await {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err(classify(e, client.credential(), repo, workflow, None, None)),
-        Err(_elapsed) => Err(timeout_error(client.request_timeout())),
-    }
-}
-
-/// Issue a raw GET via octocrab's low-level `_get` so the response
-/// headers stay accessible. Refresh `state` opportunistically with
-/// `X-RateLimit-*` from the response, then route through
-/// `map_github_error` + `FromResponse::from_response` to recover the
-/// typed body. Per-response observation keeps the rate-limit snapshot
-/// fresher than the 60s poller cadence.
-///
-/// Use this from monitor/correlator GET paths where the high-level
-/// builder would discard headers. POST paths (dispatch) call
-/// observe_headers directly because the dispatch flow needs custom
-/// 403 reclassification anyway.
 /// Inner error type carrying either an octocrab failure or a
 /// body-cap rejection. The body-cap rejections must surface as the
 /// typed `GithubErrorKind::BodyTooLarge` (Permanent) — wrapping in
@@ -261,6 +219,17 @@ impl From<octocrab::Error> for ClassifiedGetInner {
     }
 }
 
+/// Issue a raw GET via octocrab's low-level `_get` so the response
+/// headers stay accessible. Refresh `state` opportunistically with
+/// `X-RateLimit-*` from the response, then route through
+/// `map_github_error` + `FromResponse::from_response` to recover the
+/// typed body. Per-response observation keeps the rate-limit snapshot
+/// fresher than the 60s poller cadence.
+///
+/// Use this from monitor/correlator GET paths where the high-level
+/// builder would discard headers. POST paths (dispatch) call
+/// observe_headers directly because the dispatch flow needs custom
+/// 403 reclassification anyway.
 pub async fn classified_get<T>(
     client: &Client,
     rate_limit: &RateLimitState,
@@ -359,9 +328,11 @@ fn parse_content_length(headers: &http::HeaderMap) -> Option<u64> {
 /// exceeds `RESPONSE_BODY_LIMIT`; the wrapper's
 /// `Box<dyn Error + Send + Sync>` is wrapped in
 /// `octocrab::Error::Other` so the rest of octocrab's pipeline
-/// sees a single error type, then `classify_octocrab_or_body_limit`
-/// recognises the inner `LengthLimitError` and routes the result
-/// to the typed `GithubErrorKind::BodyTooLarge` variant.
+/// sees a single error type. The `From<octocrab::Error>` impl for
+/// `ClassifiedGetInner` calls `error_chain_contains` to recognise
+/// the inner `LengthLimitError` and the match in `classified_get`
+/// routes the result to the typed `GithubErrorKind::BodyTooLarge`
+/// variant.
 fn limit_response_body(
     response: http::Response<BoxBody<Bytes, octocrab::Error>>,
 ) -> http::Response<BoxBody<Bytes, octocrab::Error>> {

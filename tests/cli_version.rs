@@ -16,10 +16,17 @@ fn version_prints_crate_version_and_git_sha() {
         .stdout(predicate::str::starts_with("gcit "))
         // CARGO_PKG_VERSION baked at compile time
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")))
-        // vergen-gix injects a 7+ char git SHA in parens when
-        // built inside a git repo. cargo-mutants copies source to
-        // a scratch dir without .git, so the SHA may be absent.
-        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+        // vergen-gix injects either a 7+ char git SHA or the literal
+        // "VERGEN_IDEMPOTENT_OUTPUT" placeholder (when built outside a
+        // git checkout, e.g. cargo-mutants scratch dirs / tarball
+        // builds) inside parentheses. The regex matches both shapes:
+        // `(<7-or-more-hex>)` for a real git SHA and
+        // `(VERGEN_IDEMPOTENT_OUTPUT)` for the placeholder. Either
+        // proves bin/gcit.rs's `concat!(... " (", env!("VERGEN_GIT_SHA"), ")")`
+        // composition produced a parenthesized SHA segment.
+        .stdout(
+            predicate::str::is_match(r"\(([0-9a-f]{7,}|VERGEN_IDEMPOTENT_OUTPUT)\)").unwrap(),
+        );
 }
 
 #[test]

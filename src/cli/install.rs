@@ -213,14 +213,19 @@ pub async fn run(
 
     if interactive {
         print!("\nProceed? [y/N] ");
-        if io::stdout().flush().is_err() {
+        if let Err(e) = io::stdout().flush() {
             // stdout broken; we cannot prompt — abort safely without
-            // writing anything.
-            return ExitCode::from(exit::OK);
+            // writing anything. Surface the I/O failure as EX_OSERR
+            // so a wrapper script (CI, packager) can distinguish a
+            // broken environment from an operator declining the
+            // prompt (which exits OK below).
+            eprintln!("gcit install: stdout flush failed during prompt: {}", e);
+            return ExitCode::from(exit::OSERR);
         }
         let mut answer = String::new();
-        if io::stdin().read_line(&mut answer).is_err() {
-            return ExitCode::from(exit::OK);
+        if let Err(e) = io::stdin().read_line(&mut answer) {
+            eprintln!("gcit install: stdin read failed during prompt: {}", e);
+            return ExitCode::from(exit::OSERR);
         }
         let answer = answer.trim();
         if !matches!(answer, "y" | "Y" | "yes" | "YES" | "Yes") {
@@ -286,7 +291,7 @@ pub async fn run(
     }
 
     // Step 5: post-install next steps.
-    print_post_install(scope, has_local_mail);
+    print_post_install(scope);
 
     ExitCode::from(exit::OK)
 }
@@ -556,7 +561,7 @@ fn print_path_preview(paths: &InstallPaths, outputs: &[OutputFile], has_local_ma
     }
 }
 
-fn print_post_install(scope: InstallScope, _has_local_mail: bool) {
+fn print_post_install(scope: InstallScope) {
     println!("\n# Next steps");
     match scope {
         InstallScope::System => {

@@ -58,4 +58,4 @@ and the config schema are subject to change before 1.0.
 - systemd. `--foreground` mode is intended for development and testing; the
   supported deployment surface is the systemd units installed by `gcit
   install`.
-- Rust 1.85 or newer to build from source.
+- Rust 1.91 or newer to build from source.

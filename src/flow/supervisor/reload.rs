@@ -479,8 +479,28 @@ pub(super) async fn run_reload(
         let drain = async {
             while join_set.len() > kept_task_count {
                 match join_set.join_next().await {
-                    Some(Ok(_exit)) => {
-                        // Cancelled or natural exit; nothing to do.
+                    Some(Ok(exit)) => {
+                        // The exit is cancelled, naturally exited,
+                        // OR carries a panic. Cancelled flows are
+                        // expected; kept-alive flows that panic
+                        // mid-reload still surface here because the
+                        // shared JoinSet does not partition by name.
+                        // Logging the panic preserves the
+                        // operator-facing trace that the panic-
+                        // respawn path would otherwise emit; without
+                        // it, a kept flow's panic during the drain
+                        // window would silently disappear.
+                        if let Some(message) = &exit.panic {
+                            let kept = to_keep.contains(&exit.flow);
+                            warn!(
+                                target: "gcit::supervisor",
+                                flow = %exit.flow,
+                                role = ?exit.role,
+                                kept,
+                                panic = %message,
+                                "flow task panicked during reload drain",
+                            );
+                        }
                     }
                     Some(Err(e)) if e.is_cancelled() => {}
                     Some(Err(e)) => {

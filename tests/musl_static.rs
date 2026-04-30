@@ -7,10 +7,12 @@
 // $GCIT_MUSL_TEST is set (gates locally so a default `cargo nextest run` on
 // glibc is unaffected). CI sets $GCIT_MUSL_TEST=1 in the musl job.
 //
-// The test asserts the produced gcit binary is statically linked by reading
-// its ELF header and confirming there is no PT_INTERP segment (the dynamic
-// loader path). PT_INTERP is the canonical "this binary is dynamic" marker;
-// its absence implies the binary needs no runtime ld.so.
+// The test asserts the produced gcit binary is statically linked by
+// shelling out to `ldd <binary>` and asserting the process exits
+// non-zero. ldd treats a static binary as "not a dynamic executable"
+// (or "not dynamic" on musl), exiting with a non-zero status; a
+// dynamic binary causes ldd to exit 0. The test inverts that
+// signal.
 //
 // Skeleton — flip the #[ignore] when the musl release pipeline lands.
 

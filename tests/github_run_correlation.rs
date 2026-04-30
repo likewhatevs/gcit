@@ -320,10 +320,11 @@ async fn run_correlator_polls_with_backoff_until_match_or_timeout() {
 #[tokio::test]
 async fn fallback_keeps_runs_inside_clock_skew_buffer(#[case] offset_secs: i64) {
     // The fallback path filters runs by `created_at < cutoff` where
-    // `cutoff = dispatched_at - CLOCK_SKEW_BUFFER` (correlator.rs:430-432).
-    // CLOCK_SKEW_BUFFER is 120s — it covers NTP step scenarios so
-    // a run created seconds before the local clock's dispatched_at
-    // (per the GitHub server's clock) isn't silently discarded.
+    // `cutoff = dispatched_at - CLOCK_SKEW_BUFFER` (computed in
+    // correlate's fallback arm). CLOCK_SKEW_BUFFER is 120s — it
+    // covers NTP step scenarios so a run created seconds before the
+    // local clock's dispatched_at (per the GitHub server's clock)
+    // isn't silently discarded.
     //
     // This rstest pins the inclusive lower bound: runs at or after
     // `dispatched_at - 120s` match. Mutation target: dropping the
@@ -402,7 +403,8 @@ async fn fallback_skips_runs_outside_clock_skew_buffer() {
     // matched test asserts on the outcome directly. The non-match
     // path enters backon's 5s sleep and would only surface a hard
     // result on the 30s drain timeout (cancel doesn't abort the
-    // correlator, just shortens its deadline — correlator.rs:239).
+    // correlator, just shortens its deadline — see DRAIN_TIMEOUT in
+    // the correlator module).
     // Wrapping with a tighter `tokio::time::timeout` lets us
     // distinguish "skip" (timeout fires) from "match" (Ok lands)
     // without paying the 30s drain cost.
@@ -456,10 +458,9 @@ async fn fallback_skips_runs_outside_clock_skew_buffer() {
 async fn run_correlator_returns_unauthorized_immediately_no_retry() {
     // The list_runs endpoint returns 401. classify_status maps 401
     // to GithubErrorKind::Unauthorized -> Permanent. The correlator
-    // checks `is_transient()` (correlator.rs:288, :320) and bails
-    // immediately rather than entering the backoff loop. expect(1)
-    // pins the no-retry contract: exactly one wire request before
-    // the error surfaces.
+    // checks `is_transient()` and bails immediately rather than
+    // entering the backoff loop. expect(1) pins the no-retry
+    // contract: exactly one wire request before the error surfaces.
     ensure_crypto_provider();
     let mock = MockServer::start().await;
     Mock::given(method("GET"))
@@ -499,13 +500,14 @@ async fn run_correlator_returns_unauthorized_immediately_no_retry() {
 #[tokio::test]
 async fn correlator_handles_run_appearing_during_pagination() {
     // The correlator restarts pagination from page 1 each poll cycle
-    // (correlator.rs:14-18) so a run appearing between polls is not
-    // missed. To exercise this contract: the first poll cycle gets
-    // an empty page 1 (no match, no Link header -> single-page
-    // scan exhausted). The correlator sleeps on backon. Before the
-    // second poll cycle fires, a NEW run appears on page 1; the
-    // second poll cycle starts from page 1 (NOT continuing from
-    // wherever the previous cycle left off) and finds the match.
+    // (per the module-level invariant in correlate) so a run
+    // appearing between polls is not missed. To exercise this
+    // contract: the first poll cycle gets an empty page 1 (no match,
+    // no Link header -> single-page scan exhausted). The correlator
+    // sleeps on backon. Before the second poll cycle fires, a NEW
+    // run appears on page 1; the second poll cycle starts from
+    // page 1 (NOT continuing from wherever the previous cycle left
+    // off) and finds the match.
     //
     // Mutation target: a correlator that maintains pagination
     // state across cycles would never see the new page 1 entry.

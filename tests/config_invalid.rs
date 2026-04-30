@@ -792,10 +792,10 @@ fn template_unknown_dotted_leaf_rejected() {
 
 #[test]
 fn discord_destination_with_user_field_rejected() {
-    // src/config/validate.rs:1036-1047 rejects `user` on a
-    // discord_webhook destination because `user` belongs to local_mail.
-    // The error names destination.user so the operator's fix is
-    // unambiguous (either remove `user` or change `kind`).
+    // validate_discord rejects `user` on a discord_webhook destination
+    // because `user` belongs to local_mail. The error names
+    // destination.user so the operator's fix is unambiguous (either
+    // remove `user` or change `kind`).
     let raw = r#"
 [[flow]]
 name = "x"
@@ -832,9 +832,9 @@ user = "ops"
 
 #[test]
 fn local_mail_destination_with_credential_id_rejected() {
-    // src/config/validate.rs:1178-1189 rejects `credential_id` on a
-    // local_mail destination — local mail authenticates via the unix
-    // user, not via a credential.
+    // validate_local_mail rejects `credential_id` on a local_mail
+    // destination — local mail authenticates via the unix user, not via
+    // a credential.
     let raw = r#"
 [[flow]]
 name = "x"
@@ -871,9 +871,9 @@ credential_id = "extra-id"
 
 #[test]
 fn discord_template_with_subject_field_rejected() {
-    // src/config/validate.rs:1104-1119 rejects `subject` (and `body`)
-    // inside a discord_webhook destination's template — those fields
-    // belong to local_mail's mboxrd format, not Discord's embed.
+    // validate_discord_template rejects `subject` (and `body`) inside a
+    // discord_webhook destination's template — those fields belong to
+    // local_mail's mboxrd format, not Discord's embed.
     let raw = r#"
 [[flow]]
 name = "x"
@@ -911,9 +911,9 @@ subject = "should not be here"
 
 #[test]
 fn local_mail_template_with_discord_title_field_rejected() {
-    // src/config/validate.rs:1278-1299 rejects discord-specific
-    // template fields (`title`, `description`, `field_name`,
-    // `field_value`, `collapsed_summary`) on a local_mail destination.
+    // validate_local_mail_template rejects discord-specific template
+    // fields (`title`, `description`, `field_name`, `field_value`,
+    // `collapsed_summary`) on a local_mail destination.
     let raw = r#"
 [[flow]]
 name = "x"
@@ -951,9 +951,9 @@ title = "should not be here"
 
 #[test]
 fn unknown_destination_kind_rejected() {
-    // src/config/validate.rs:1006-1018 rejects any destination.kind
-    // outside the {discord_webhook, local_mail} set with an actionable
-    // error naming both supported variants.
+    // validate_destinations rejects any destination.kind outside the
+    // {discord_webhook, local_mail} set with an actionable error naming
+    // both supported variants.
     let raw = r#"
 [[flow]]
 name = "x"
@@ -996,10 +996,10 @@ credential_id = "c"
 
 #[test]
 fn unknown_action_kind_rejected() {
-    // src/config/validate.rs:922-934 rejects any action.kind outside
-    // the {github_workflow_dispatch} set. The error must name the
-    // supplied kind (with quotes) AND the only currently-valid kind so
-    // a future expansion doesn't break operator-facing diagnostics.
+    // validate_action rejects any action.kind outside the
+    // {github_workflow_dispatch} set. The error must name the supplied
+    // kind (with quotes) AND the only currently-valid kind so a future
+    // expansion doesn't break operator-facing diagnostics.
     let raw = r#"
 [[flow]]
 name = "x"
@@ -1032,14 +1032,13 @@ credential_id = "c"
 
 // ---------------------------------------------------------------------
 // action.workflow empty vs path-traversal: distinct error messages
-// for the two arms of validate_action's workflow check
-// (src/config/validate.rs:823-846).
+// for the two arms of validate_action's workflow check.
 // ---------------------------------------------------------------------
 
 #[test]
 fn action_workflow_empty_string_emits_non_empty_error() {
-    // The empty-string arm (line 826-835) emits a different message
-    // from the path-traversal arm (line 836-846). The existing
+    // The empty-string arm of validate_action emits a different message
+    // from the path-traversal arm. The existing
     // action_workflow_invalid_forms_rejected test covers both arms
     // under one assertion; pin the empty-string message specifically
     // so a regression that swaps the two messages surfaces.
@@ -1060,9 +1059,8 @@ fn action_workflow_empty_string_emits_non_empty_error() {
 }
 
 // ---------------------------------------------------------------------
-// action.ref must start with "refs/" (validate_action arm at line
-// 850-863). Existing source.ref test does NOT cover the action.ref
-// arm.
+// action.ref must start with "refs/" (validate_action arm). Existing
+// source.ref test does NOT cover the action.ref arm.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -1103,7 +1101,8 @@ credential_id = "c"
 }
 
 // ---------------------------------------------------------------------
-// action.credential_id missing rejected (line 877-888 arm).
+// action.credential_id missing rejected (validate_action's missing-
+// credential_id arm).
 // ---------------------------------------------------------------------
 
 #[test]
@@ -1137,9 +1136,9 @@ ref = "refs/heads/main"
 }
 
 // ---------------------------------------------------------------------
-// http.request_timeout bounds (validate_http via parse_bounded_duration
-// at line 532-544). Existing tests cover other intervals but not the
-// http-specific bounds [MIN_HTTP_TIMEOUT=1s, MAX_HTTP_TIMEOUT=300s].
+// http.request_timeout bounds (validate_http via parse_bounded_duration).
+// Existing tests cover other intervals but not the http-specific bounds
+// [MIN_HTTP_TIMEOUT=1s, MAX_HTTP_TIMEOUT=300s].
 // ---------------------------------------------------------------------
 
 fn build_with_http_request_timeout(timeout: &str) -> String {
@@ -1165,8 +1164,8 @@ credential_id = "c"
 
 #[test]
 fn http_request_timeout_below_min_rejected() {
-    // MIN_HTTP_TIMEOUT = 1s (validate.rs:69). 500ms is below the
-    // bound; parse_bounded_duration's `d < min` arm fires.
+    // MIN_HTTP_TIMEOUT = 1s. 500ms is below the bound;
+    // parse_bounded_duration's `d < min` arm fires.
     let toml = build_with_http_request_timeout("500ms");
     let errors = gcit::config::load_str(&toml, std::path::Path::new("inline"))
         .expect_err("request_timeout=500ms must reject");
@@ -1183,7 +1182,7 @@ fn http_request_timeout_below_min_rejected() {
 
 #[test]
 fn http_request_timeout_above_max_rejected() {
-    // MAX_HTTP_TIMEOUT = 300s (validate.rs:71). 10m exceeds the bound.
+    // MAX_HTTP_TIMEOUT = 300s. 10m exceeds the bound.
     let toml = build_with_http_request_timeout("10m");
     let errors = gcit::config::load_str(&toml, std::path::Path::new("inline"))
         .expect_err("request_timeout=10m must reject");
@@ -1200,8 +1199,8 @@ fn http_request_timeout_above_max_rejected() {
 
 #[test]
 fn http_request_timeout_at_min_boundary_accepted() {
-    // The lower bound is INCLUSIVE per validate.rs:69 doc comment.
-    // 1s must load.
+    // The lower bound is INCLUSIVE per the MIN_HTTP_TIMEOUT doc
+    // comment. 1s must load.
     let toml = build_with_http_request_timeout("1s");
     gcit::config::load_str(&toml, std::path::Path::new("inline"))
         .expect("request_timeout=1s must be accepted at lower boundary");
@@ -1209,15 +1208,16 @@ fn http_request_timeout_at_min_boundary_accepted() {
 
 #[test]
 fn http_request_timeout_at_max_boundary_accepted() {
-    // Upper bound is INCLUSIVE per validate.rs:71. 300s/5min must load.
+    // Upper bound is INCLUSIVE per the MAX_HTTP_TIMEOUT doc comment.
+    // 300s/5min must load.
     let toml = build_with_http_request_timeout("5m");
     gcit::config::load_str(&toml, std::path::Path::new("inline"))
         .expect("request_timeout=5m must be accepted at upper boundary");
 }
 
 // ---------------------------------------------------------------------
-// poll.source_interval at MAX_INTERVAL=24h (validate.rs:56). The
-// existing below_min_interval fixture covers MIN; pin MAX.
+// poll.source_interval at MAX_INTERVAL=24h. The existing
+// below_min_interval fixture covers MIN; pin MAX.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -1253,10 +1253,10 @@ credential_id = "c"
 }
 
 // ---------------------------------------------------------------------
-// case-confusable hint surfaces in the operator-facing message
-// (validate.rs:1407 + 1450-1458). A duration string containing
-// uppercase 'M' parses successfully under humantime (months) but
-// almost always indicates an operator typo for minutes. The hint
+// case-confusable hint surfaces in the operator-facing message via
+// case_confusable_hint inside parse_bounded_duration. A duration string
+// containing uppercase 'M' parses successfully under humantime (months)
+// but almost always indicates an operator typo for minutes. The hint
 // surfaces in the bounded-out-of-range arm OR the parse-failure arm
 // depending on the magnitude; an interval of "5M" parses to ~5 months
 // which is way over MAX_INTERVAL=24h, so the bounded-out-of-range arm
@@ -1297,10 +1297,9 @@ credential_id = "c"
 
 // ---------------------------------------------------------------------
 // fire_on with multiple distinct duplicates emits one Validate per
-// duplicate occurrence (collect_fire_on at line 1467-1502). The
-// existing fire_on_duplicate_event_rejected test only proves "one
-// duplicate" surfaces; pin that two distinct duplicates surface as
-// two errors.
+// duplicate occurrence (collect_fire_on). The existing
+// fire_on_duplicate_event_rejected test only proves "one duplicate"
+// surfaces; pin that two distinct duplicates surface as two errors.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -1351,15 +1350,14 @@ fire_on = ["run_complete", "run_complete", "job_complete", "job_complete"]
 // ---------------------------------------------------------------------
 // validate_spool_writability — host-state probe of /var/mail/<user>.
 //
-// `validate_spool_writability` is `pub` (src/config/validate.rs:402-403)
-// so integration tests can drive it with a tempdir-rooted spool root
-// override. Each test pre-stages the tempdir to provoke a specific
-// SpoolProbe variant inside `probe_spool_writability` (lines 146-191),
-// then asserts the resulting `Vec<ConfigError>` carries the right
-// per-variant message + suggestion (lines 414-486). Each
-// SpoolProbe variant emits a distinct ConfigError shape — covering all
-// four reachable variants here exercises ~100 lines of validate.rs that
-// no other test hits today.
+// `validate_spool_writability` is `pub` so integration tests can drive
+// it with a tempdir-rooted spool root override. Each test pre-stages
+// the tempdir to provoke a specific SpoolProbe variant inside
+// `probe_spool_writability`, then asserts the resulting
+// `Vec<ConfigError>` carries the right per-variant message + suggestion.
+// Each SpoolProbe variant emits a distinct ConfigError shape —
+// covering all four reachable variants here exercises validate.rs paths
+// that no other test hits today.
 // ---------------------------------------------------------------------
 
 fn local_mail_only_config(user: &str) -> String {
@@ -1389,7 +1387,7 @@ fn validate_spool_writability_writable_path_emits_no_error() {
     use std::os::unix::fs::PermissionsExt;
     // Build a tempdir spool root, place a writable file at <root>/<user>,
     // and call validate_spool_writability with that root. probe_spool_writability
-    // returns SpoolProbe::Writable (validate.rs:162-163) → no error pushed.
+    // returns SpoolProbe::Writable → no error pushed.
     let td = tempfile::TempDir::new().unwrap();
     let user = "testuser";
     let spool = td.path().join(user);
@@ -1417,9 +1415,9 @@ fn validate_spool_writability_parent_missing_emits_parent_missing_error() {
     // Spool root that does NOT exist on disk (a sub-path inside the
     // tempdir we never created). probe_spool_writability gets ENOENT
     // on the spool path AND ENOENT on the parent (the access(F_OK)
-    // probe at validate.rs:181-185 returns non-zero), so it returns
+    // probe returns non-zero), so it returns
     // SpoolProbe::ParentMissing. validate_spool_writability emits the
-    // "spool parent directory ... does not exist" message at validate.rs:414-433.
+    // "spool parent directory ... does not exist" message.
     let td = tempfile::TempDir::new().unwrap();
     let user = "anyuser";
     // Use a sub-dir of the tempdir as the "spool root" — the sub-dir
@@ -1461,7 +1459,7 @@ fn validate_spool_writability_spool_missing_emits_spool_missing_error() {
     // access(W_OK) on <root>/<user> returns ENOENT; access(F_OK) on
     // the parent (the tempdir itself) returns 0 → SpoolProbe::SpoolMissing.
     // validate_spool_writability emits the "spool file ... does not exist"
-    // message at validate.rs:434-451.
+    // message.
     let td = tempfile::TempDir::new().unwrap();
     let user = "missing-user";
     // Don't create <td>/<user> — let access(W_OK) hit ENOENT on it.
@@ -1547,9 +1545,10 @@ fn validate_spool_writability_not_writable_emits_not_writable_error() {
 #[test]
 fn validate_spool_writability_no_local_mail_destinations_emits_no_error() {
     // Discord-only config has no LocalMail destinations — the inner
-    // `if let Destination::LocalMail(lm) = dest` guard at
-    // validate.rs:410 fails for every destination, so probe_spool_writability
-    // is never called and the error vec stays empty.
+    // `if let Destination::LocalMail(lm) = dest` guard inside
+    // validate_spool_writability fails for every destination, so
+    // probe_spool_writability is never called and the error vec stays
+    // empty.
     let raw = r#"
 [[flow]]
 name = "discord-only"
@@ -1579,8 +1578,8 @@ credential_id = "c"
 
 #[test]
 fn validate_spool_writability_default_spool_root_uses_var_mail() {
-    // spool_root = None (validate.rs:405-407) resolves to
-    // mail::DEFAULT_SPOOL_DIR (`/var/mail`). For a config with
+    // spool_root = None resolves to mail::DEFAULT_SPOOL_DIR
+    // (`/var/mail`). For a config with
     // local_mail destination naming a user that almost certainly
     // doesn't have a /var/mail/<random> spool, we expect SOME error
     // (Writable for an unlikely-existing user would be a coincidence).
@@ -1591,7 +1590,7 @@ fn validate_spool_writability_default_spool_root_uses_var_mail() {
     // routing through the default-path branch; the user value is
     // randomized so a host with that user pre-configured is
     // statistically impossible.
-    // 32-char max for local_mail.user (validate.rs:62 MAX_LOCAL_MAIL_USER_LEN).
+    // 32-char max for local_mail.user (MAX_LOCAL_MAIL_USER_LEN).
     // Stay under 32 chars while keeping a low collision risk on dev hosts.
     let user = "gcit-spool-test-9f3a2b-no-host";
     let cfg = gcit::config::load_str(
@@ -1625,10 +1624,10 @@ fn validate_spool_writability_default_spool_root_uses_var_mail() {
 fn validate_spool_writability_two_local_mail_destinations_emit_one_error_each() {
     // Two local_mail destinations with distinct users; both spool
     // files missing → two separate SpoolMissing errors. Pins the
-    // per-destination iteration at validate.rs:408-489 (the outer
-    // `for flow in &cfg.flow` and inner `for dest in &flow.destination`
-    // loops both fire). Catches a regression where the loop short-
-    // circuits after the first error.
+    // per-destination iteration in validate_spool_writability (the
+    // outer `for flow in &cfg.flow` and inner `for dest in
+    // &flow.destination` loops both fire). Catches a regression where
+    // the loop short-circuits after the first error.
     let raw = r#"
 [[flow]]
 name = "multi-dest"
@@ -1683,9 +1682,8 @@ fn euid_is_root() -> bool {
 // parse_bounded_duration parse-failure path emits ConfigError::Parse
 // (NOT Validate). The two error categories carry different fix-it
 // shapes: Parse → "fix the syntax", Validate → "pick a different
-// number" (validate.rs:1408-1416 vs 1418-1438). The existing
-// below_min_interval fixture covers the Validate arm; this test
-// covers the distinct Parse arm.
+// number". The existing below_min_interval fixture covers the
+// Validate arm; this test covers the distinct Parse arm.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -1693,8 +1691,8 @@ fn malformed_humantime_duration_emits_parse_error_not_validate() {
     // "xyz" is not a valid humantime duration — humantime::parse_duration
     // returns Err. parse_bounded_duration's Err arm pushes
     // ConfigError::Parse with the "{field} = {raw:?}: invalid duration: ..."
-    // message (validate.rs:1410-1414). Pin: a Parse variant exists for
-    // the right field, NOT a Validate variant.
+    // message. Pin: a Parse variant exists for the right field, NOT a
+    // Validate variant.
     let raw = r#"
 [poll]
 source_interval = "xyz"
@@ -1741,9 +1739,8 @@ credential_id = "c"
 // ---------------------------------------------------------------------
 // IdError variants surfaced via credential_id rejection. Each variant
 // of `config::credential::IdError` (Empty, TooLong, InvalidChar,
-// LeadingHyphen, PathTraversal at credential.rs:49-55) drives a
-// different operator-facing message + suggestion via
-// `validate.rs::map_id_error` at line 1575-1592. The existing
+// LeadingHyphen, PathTraversal) drives a different operator-facing
+// message + suggestion via `validate.rs::map_id_error`. The existing
 // credential_id_collision fixture covers env-var collision but NONE
 // of the per-variant IdError paths.
 // ---------------------------------------------------------------------
@@ -1769,9 +1766,9 @@ credential_id = "{}"
 
 #[test]
 fn credential_id_with_invalid_char_rejected_with_named_char() {
-    // IdError::InvalidChar { ch } message at credential.rs:64-67 names
-    // the offending character (e.g. ' ' or '@'). Pin that the message
-    // names the specific char so the operator sees what to remove.
+    // IdError::InvalidChar { ch } message names the offending character
+    // (e.g. ' ' or '@'). Pin that the message names the specific char
+    // so the operator sees what to remove.
     let toml = build_with_credential_id("foo@bar");
     let errors = gcit::config::load_str(&toml, std::path::Path::new("inline"))
         .expect_err("invalid char in credential_id must reject");
@@ -1798,8 +1795,8 @@ fn credential_id_with_invalid_char_rejected_with_named_char() {
 
 #[test]
 fn credential_id_starting_with_hyphen_rejected_with_cli_flag_warning() {
-    // IdError::LeadingHyphen at credential.rs:68-70: leading '-'
-    // conflicts with CLI flags. Pin the operator-facing wording.
+    // IdError::LeadingHyphen: leading '-' conflicts with CLI flags.
+    // Pin the operator-facing wording.
     let toml = build_with_credential_id("-leading-hyphen");
     let errors = gcit::config::load_str(&toml, std::path::Path::new("inline"))
         .expect_err("credential_id starting with - must reject");
@@ -1826,20 +1823,19 @@ fn credential_id_starting_with_hyphen_rejected_with_cli_flag_warning() {
 
 #[test]
 fn credential_id_with_path_traversal_chars_rejected() {
-    // IdError::PathTraversal at credential.rs:71-73 covers '..', '/',
-    // '\', '~', or NUL. Try '/' specifically because that's the most
-    // common operator typo (using "discord/webhook" instead of
-    // "discord-webhook").
+    // IdError::PathTraversal covers '..', '/', '\', '~', or NUL. Try
+    // '/' specifically because that's the most common operator typo
+    // (using "discord/webhook" instead of "discord-webhook").
     let toml = build_with_credential_id("discord/webhook");
     let errors = gcit::config::load_str(&toml, std::path::Path::new("inline"))
         .expect_err("credential_id with '/' must reject");
     // Could surface as either PathTraversal (the dedicated arm) OR
     // InvalidChar (since '/' is also outside [a-zA-Z0-9_-]). The
-    // production code at credential.rs:146-onwards must check
-    // path-traversal BEFORE the charset; pin EITHER the
-    // path-traversal message OR the invalid-char message so the test
-    // catches whichever the production code emits without
-    // over-specifying the implementation choice.
+    // production code (CredentialId parser) must check path-traversal
+    // BEFORE the charset; pin EITHER the path-traversal message OR
+    // the invalid-char message so the test catches whichever the
+    // production code emits without over-specifying the implementation
+    // choice.
     let any = errors.iter().any(|e| match e {
         gcit::config::ConfigError::Validate { field, message, .. } => {
             field == "action.credential_id"
@@ -1856,10 +1852,9 @@ fn credential_id_with_path_traversal_chars_rejected() {
 
 #[test]
 fn credential_id_too_long_rejected_with_max_chars_message() {
-    // IdError::TooLong at credential.rs:61-63 names the supplied
-    // length and the max. The MAX_LEN constant lives in credential.rs;
-    // we don't know its exact value here but a 200-char id is
-    // definitely over the limit.
+    // IdError::TooLong names the supplied length and the max. The
+    // MAX_LEN constant lives in credential.rs; we don't know its
+    // exact value here but a 200-char id is definitely over the limit.
     let long_id = "a".repeat(200);
     let toml = build_with_credential_id(&long_id);
     let errors = gcit::config::load_str(&toml, std::path::Path::new("inline"))
@@ -1887,10 +1882,10 @@ fn credential_id_too_long_rejected_with_max_chars_message() {
 
 // ---------------------------------------------------------------------
 // source.credential_id surfaces through validate_credential_id with the
-// "source.credential_id" field tag (validate.rs:751). The existing
-// per-IdError tests above all drive action.credential_id; pin that the
-// SAME map_id_error path produces a source.credential_id Validate when
-// the bad id appears under [flow.source].
+// "source.credential_id" field tag (set inside validate_source). The
+// existing per-IdError tests above all drive action.credential_id; pin
+// that the SAME map_id_error path produces a source.credential_id
+// Validate when the bad id appears under [flow.source].
 // ---------------------------------------------------------------------
 
 #[test]
@@ -1959,7 +1954,7 @@ credential_id = "c"
 // ---------------------------------------------------------------------
 // destination.discord_webhook.credential_id rejection arm — symmetric
 // to source.credential_id and action.credential_id but uses the longer
-// field tag at validate.rs:1051. Pin that bad ids under
+// field tag set inside validate_discord. Pin that bad ids under
 // [[flow.destination]] produce that specific field tag.
 // ---------------------------------------------------------------------
 
@@ -1998,7 +1993,8 @@ credential_id = "bad space"
 
 // ---------------------------------------------------------------------
 // destination.credential_id missing on discord_webhook surfaces a
-// Validate at the kind line (validate.rs:1059-1071).
+// Validate at the kind line (validate_discord's missing-credential_id
+// arm).
 // ---------------------------------------------------------------------
 
 #[test]
@@ -2036,7 +2032,7 @@ kind = "discord_webhook"
 
 // ---------------------------------------------------------------------
 // local_mail destination missing user surfaces Validate at the kind
-// line (validate.rs:1192-1203).
+// line (validate_local_mail's missing-user arm).
 // ---------------------------------------------------------------------
 
 #[test]
@@ -2072,9 +2068,10 @@ kind = "local_mail"
 }
 
 // ---------------------------------------------------------------------
-// flow.poll.job_interval bounded check (validate.rs:1336-1345).
-// Existing tests cover flow.poll.source_interval below_min and
-// flow.poll.jitter out_of_range, but not the job_interval branch.
+// flow.poll.job_interval bounded check (validate_poll_override's
+// job_interval arm). Existing tests cover flow.poll.source_interval
+// below_min and flow.poll.jitter out_of_range, but not the
+// job_interval branch.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -2108,8 +2105,9 @@ job_interval = "1s"
 }
 
 // ---------------------------------------------------------------------
-// poll.job_interval (top-level default, validate.rs:507-511).
-// Existing tests do not cover top-level job_interval out-of-range.
+// poll.job_interval (top-level default, validate_poll_defaults's
+// job_interval arm). Existing tests do not cover top-level
+// job_interval out-of-range.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -2143,8 +2141,8 @@ credential_id = "c"
 }
 
 // ---------------------------------------------------------------------
-// poll.jitter (top-level default, validate.rs:512-516).
-// Existing tests do not cover top-level jitter validation.
+// poll.jitter (top-level default, validate_poll_defaults's jitter
+// arm). Existing tests do not cover top-level jitter validation.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -2180,20 +2178,19 @@ credential_id = "c"
 
 // ---------------------------------------------------------------------
 // Template compilation failure surfaces as ConfigError::TemplateCompile,
-// distinct from the AST-level Validate that find_bare_name produces
-// (validate.rs:1619-1627). Unbalanced `{{` is a handlebars parse error
-// that kicks in BEFORE the bare-name AST check — pinned because the two
-// errors have different operator semantics ("syntax broken" vs "use a
-// dotted form").
+// distinct from the AST-level Validate that find_bare_name produces.
+// Unbalanced `{{` is a handlebars parse error that kicks in BEFORE the
+// bare-name AST check — pinned because the two errors have different
+// operator semantics ("syntax broken" vs "use a dotted form").
 // ---------------------------------------------------------------------
 
 #[test]
 fn template_with_unbalanced_braces_emits_template_compile_error() {
     // Unbalanced `{{` — handlebars's parser rejects with a TemplateError.
-    // validate_discord_template's compile_template_field at line
-    // 1619-1627 pushes ConfigError::TemplateCompile. Pin: the variant
-    // is TemplateCompile (NOT Validate) — different display shape and
-    // different operator fix-it.
+    // validate_discord_template's compile_template_field pushes
+    // ConfigError::TemplateCompile. Pin: the variant is TemplateCompile
+    // (NOT Validate) — different display shape and different operator
+    // fix-it.
     let raw = r#"
 [[flow]]
 name = "x"
@@ -2229,10 +2226,10 @@ title = "{{ unterminated"
 
 // ---------------------------------------------------------------------
 // All five Discord template fields under cross-kind rejection on
-// local_mail (validate.rs:1278-1299). Existing tests only exercise the
-// `title` row in that loop; pin every other field so the loop's per-
-// field iteration cannot be partially short-circuited by a future
-// refactor.
+// local_mail (validate_local_mail_template's discord-only-fields loop).
+// Existing tests only exercise the `title` row in that loop; pin every
+// other field so the loop's per-field iteration cannot be partially
+// short-circuited by a future refactor.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -2308,8 +2305,8 @@ field_name = "should not be here"
 #[test]
 fn discord_template_with_body_field_rejected() {
     // Mirror of discord_template_with_subject_field_rejected for the
-    // `body` field at validate.rs:1104 (the for-loop iterates over
-    // both subject and body — pin the body row too).
+    // `body` field (validate_discord_template's local-mail-only fields
+    // loop iterates over both subject and body — pin the body row too).
     let raw = r#"
 [[flow]]
 name = "x"
@@ -2347,7 +2344,7 @@ body = "should not be here"
 
 // ---------------------------------------------------------------------
 // Empty flow.name surfaces a Validate that names the non-empty rule.
-// The validator's empty-name arm at validate.rs:578-588 emits a
+// The validator's empty-name arm in validate_flow_name emits a
 // distinct message from the length+charset arms; pin the wording so
 // a regression that conflates the arms surfaces here.
 // ---------------------------------------------------------------------
@@ -2367,10 +2364,11 @@ fn flow_name_empty_string_emits_non_empty_validate_error() {
 }
 
 // ---------------------------------------------------------------------
-// poll.jitter at exact boundaries 0.0 and 0.5 must be accepted (inclusive
-// per validate.rs:1514). The existing flow.poll.jitter test only
-// exercises out-of-range; pin acceptance at both ends so a regression
-// to a strict-less-than predicate would surface.
+// poll.jitter at exact boundaries 0.0 and 0.5 must be accepted
+// (inclusive per parse_jitter's MIN_JITTER..=MAX_JITTER predicate).
+// The existing flow.poll.jitter test only exercises out-of-range;
+// pin acceptance at both ends so a regression to a strict-less-than
+// predicate would surface.
 // ---------------------------------------------------------------------
 
 #[test]

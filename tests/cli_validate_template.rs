@@ -12,7 +12,7 @@ use std::io::Write;
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-/// EX_DATAERR per src/cli/exit.rs::DATAERR — kept as a literal here
+/// EX_DATAERR per cli::exit::DATAERR — kept as a literal here
 /// so a drift in the constant trips the test rather than silently
 /// passing.
 const EX_DATAERR: i32 = 65;
@@ -129,15 +129,15 @@ fn validate_template_rejects_bare_gcit_run_id_exit_65() {
 
 #[test]
 fn validate_template_with_kind_discord_emits_surface_header_to_stderr() {
-    // The `--kind` flag is wired in src/cli/validate_template.rs:85-92:
-    // when set, the run prints a one-line stderr header "validating
+    // The `--kind` flag is wired in cli::validate_template::run: when
+    // set, the run prints a one-line stderr header "validating
     // <path> against the <surface> surface" before the compile/render
-    // pipeline. clap's kebab-case rename in src/cli/validate_template.rs:45
-    // maps `--kind discord` to `Kind::Discord` whose label is "discord"
-    // (line 58-61). Pin that the surface label appears verbatim in
-    // stderr so operators reading CI logs see which surface they
-    // validated. The template itself is a passing one so the test
-    // isolates the header behaviour from the render result.
+    // pipeline. clap's kebab-case rename on the Kind enum maps
+    // `--kind discord` to `Kind::Discord` whose label is "discord".
+    // Pin that the surface label appears verbatim in stderr so
+    // operators reading CI logs see which surface they validated.
+    // The template itself is a passing one so the test isolates the
+    // header behaviour from the render result.
     let f = write_template_file("flow:{{flow.name}}");
     Command::cargo_bin("gcit")
         .unwrap()
@@ -153,11 +153,11 @@ fn validate_template_with_kind_discord_emits_surface_header_to_stderr() {
 #[test]
 fn validate_template_with_kind_local_mail_emits_surface_header_to_stderr() {
     // Mirrors the discord case for the local-mail surface. The
-    // kebab-case rename at src/cli/validate_template.rs:45 maps
-    // `--kind local-mail` (CLI form) to `Kind::LocalMail` (Rust form);
-    // the label() at line 60 returns "local_mail" (snake_case — chosen
-    // to match the destination kind in config.toml so the header line
-    // operators see in CI matches the kind they typed in their config).
+    // kebab-case rename on the Kind enum maps `--kind local-mail`
+    // (CLI form) to `Kind::LocalMail` (Rust form); Kind::label
+    // returns "local_mail" (snake_case — chosen to match the
+    // destination kind in config.toml so the header line operators
+    // see in CI matches the kind they typed in their config).
     let f = write_template_file("flow:{{flow.name}}");
     Command::cargo_bin("gcit")
         .unwrap()

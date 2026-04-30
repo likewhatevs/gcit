@@ -1,7 +1,7 @@
 // State file load/save round-trip.
 // State at $STATE_DIRECTORY/state.json. Schema versioned (schema: 1).
-// StateUpdate variants: PollObservation, RunStarted, RunFinished,
-// FlowRemoved.
+// StateUpdate variants: PollObservation, PollTimestamp, RunStarted,
+// RunFinished, FlowRemoved.
 // Testing strategy: tempdir + assert_fs | drain, atomicity, schema
 // version.
 //

@@ -193,8 +193,7 @@ async fn execute_webhook_no_content_field_when_only_embed() {
 async fn execute_webhook_204_treated_as_success() {
     // Default Discord webhook response (without ?wait=true) is 204
     // No Content. The notifier maps 2xx to NotifyOutcome::Sent with
-    // a `webhook:<id>` receipt format (per src/discord/notifier.rs
-    // deliver()).
+    // a `webhook:<id>` receipt format (per discord::notifier::deliver).
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path_regex(format!(
@@ -262,7 +261,7 @@ async fn execute_webhook_5xx_returns_transient_error() {
         NotifyError::Transient { source, .. } => {
             let msg = source.to_string();
             // Production classifier emits "discord HTTP 500 ..." for
-            // 5xx (see src/discord/notifier.rs::classify_twilight_error).
+            // 5xx (see discord::notifier::classify_twilight_error).
             assert!(
                 msg.contains("500"),
                 "transient error must surface the 500 status; got {msg}",
@@ -276,7 +275,7 @@ async fn execute_webhook_5xx_returns_transient_error() {
 async fn execute_webhook_4xx_non_429_returns_permanent_error() {
     // 401, 403, 404, 410 each map to NotifyError::Permanent with a
     // distinct, operator-actionable message. The production
-    // classifier in src/discord/notifier.rs assigns specific phrases
+    // classifier in discord::notifier assigns specific phrases
     // ("invalid token", "forbidden", "webhook deleted", "channel
     // closed"); this integration test pins the wiring + the message
     // distinguishability for each 4xx code.
@@ -356,13 +355,13 @@ async fn build_notifier_with_timeout(
 
 #[tokio::test]
 async fn execute_webhook_request_timeout_classified_as_transient() {
-    // Production classify_twilight_error at notifier.rs:237-240 maps
-    // ErrorType::RequestTimedOut to NotifyError::Transient with the
-    // message "discord request timed out:". The integration tests
-    // above cover Response{status} variants; this test covers the
-    // RequestTimedOut variant by setting the client's per-request
-    // timeout BELOW the wiremock response delay so the round-trip
-    // surfaces a TimedOut error rather than a status response.
+    // Production classify_twilight_error maps ErrorType::RequestTimedOut
+    // to NotifyError::Transient with the message "discord request
+    // timed out:". The integration tests above cover Response{status}
+    // variants; this test covers the RequestTimedOut variant by
+    // setting the client's per-request timeout BELOW the wiremock
+    // response delay so the round-trip surfaces a TimedOut error
+    // rather than a status response.
     //
     // 200ms request_timeout vs 5s mock delay — the gap is large
     // enough that the timeout arm always fires deterministically,
@@ -414,13 +413,13 @@ async fn execute_webhook_request_timeout_classified_as_transient() {
 
 #[tokio::test]
 async fn execute_webhook_other_4xx_returns_permanent_error_via_catch_all_arm() {
-    // Production classify_twilight_error at notifier.rs:227-232 maps
-    // any 4xx code NOT in {401, 403, 404, 410, 429} to a generic
-    // Permanent error with "discord HTTP {code}" in the message.
-    // The existing 4xx test only exercises the enumerated codes; this
-    // test covers the catch-all Permanent fallback arm. 422 is the
-    // canonical "your request was malformed in some way Discord didn't
-    // hardcode" code that would land here in practice.
+    // Production classify_twilight_error maps any 4xx code NOT in
+    // {401, 403, 404, 410, 429} to a generic Permanent error with
+    // "discord HTTP {code}" in the message. The existing 4xx test
+    // only exercises the enumerated codes; this test covers the
+    // catch-all Permanent fallback arm. 422 is the canonical "your
+    // request was malformed in some way Discord didn't hardcode" code
+    // that would land here in practice.
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path_regex(format!(
@@ -457,15 +456,15 @@ async fn execute_webhook_other_4xx_returns_permanent_error_via_catch_all_arm() {
 
 #[tokio::test]
 async fn execute_webhook_unreachable_host_classified_as_transient_transport_error() {
-    // Production classify_twilight_error at notifier.rs:243-246 maps
-    // every non-Response/non-Validation/non-RequestTimedOut error
-    // type (Hyper, Parsing, network, cancellation) to
-    // NotifyError::Transient with "discord transport error:" in the
-    // message body. Drive the catch-all arm by pointing the client
-    // at a guaranteed-unreachable address — port 1 is reserved on
-    // every modern OS, and 127.0.0.1:1 produces an ECONNREFUSED at
-    // the OS level which surfaces through twilight-http as a
-    // hyper-shaped error type, NOT Response/Validation/Timeout.
+    // Production classify_twilight_error maps every
+    // non-Response/non-Validation/non-RequestTimedOut error type
+    // (Hyper, Parsing, network, cancellation) to NotifyError::Transient
+    // with "discord transport error:" in the message body. Drive the
+    // catch-all arm by pointing the client at a guaranteed-unreachable
+    // address — port 1 is reserved on every modern OS, and
+    // 127.0.0.1:1 produces an ECONNREFUSED at the OS level which
+    // surfaces through twilight-http as a hyper-shaped error type,
+    // NOT Response/Validation/Timeout.
     common::ensure_crypto_provider();
     let client = Client::for_test("127.0.0.1:1".to_string(), Duration::from_secs(2))
         .expect("for_test build");

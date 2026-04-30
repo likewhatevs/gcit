@@ -32,7 +32,7 @@ pub const STATE_FILENAME: &str = "state.json";
 /// `$RUNTIME_DIRECTORY/gcit.lock` (fd-lock, tmpfs).
 pub const LOCK_FILENAME: &str = "gcit.lock";
 
-/// Two-field probe for the schema version.
+/// Single-field probe for the schema version.
 ///
 /// Used by `load_or_init` for a cheap first-pass deserialize that
 /// pulls only the `schema` field out of the JSON. The full `State`
@@ -340,8 +340,8 @@ pub fn load_or_init(path: &Path) -> Result<State, StateError> {
     }
 
     // Pass 2: full deserialize with deny_unknown_fields. The schema
-    // field is re-read by serde here (cheap — it's already in the
-    // arena); the probe above already proved it's correct.
+    // field is re-parsed from the same buffer; the probe above
+    // already proved it's correct.
     let state: State = serde_json::from_str(&buf).map_err(|e| StateError::Load {
         path: path.to_path_buf(),
         message: format!("deserialize state: {}", e),

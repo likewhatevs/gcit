@@ -2,7 +2,7 @@
 name = "gcit"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.91"
 license = "GPL-2.0-only"
 description = "Poll git repos, dispatch GitHub Actions workflows, post Discord notifications. Linux + systemd."
 repository = "https://github.com/likewhatevs/gcit"

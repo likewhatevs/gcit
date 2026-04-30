@@ -159,8 +159,11 @@ pub fn render_service_unit(cfg: &Config, scope: InstallScope, binary_path: &Path
         s.push_str("DynamicUser=yes\n");
     }
 
-    // Hardening directives, byte-for-byte.
-    for line in [
+    // Hardening directives, byte-for-byte. `ReadWritePaths=/var/mail`
+    // is gated on `has_local_mail` so a Discord-only install does
+    // not punch an extra writable path through `ProtectSystem=strict`
+    // — the local_mail notifier is the only writer to /var/mail.
+    let mut hardening: Vec<&str> = vec![
         "NoNewPrivileges=yes",
         "ProtectSystem=strict",
         "ProtectHome=yes",
@@ -191,11 +194,18 @@ pub fn render_service_unit(cfg: &Config, scope: InstallScope, binary_path: &Path
         "StateDirectoryMode=0700",
         "ConfigurationDirectory=gcit",
         "ConfigurationDirectoryMode=0750",
-        "ReadWritePaths=/var/mail",
+    ];
+    if has_local_mail {
+        hardening.push("ReadWritePaths=/var/mail");
+    }
+    for line in [
         "Restart=on-failure",
         "NotifyAccess=main",
         "TimeoutStopSec=360",
     ] {
+        hardening.push(line);
+    }
+    for line in &hardening {
         s.push_str(line);
         s.push('\n');
     }
@@ -367,7 +377,6 @@ credential_id = "discord_webhook"
             "StateDirectoryMode=0700",
             "ConfigurationDirectory=gcit",
             "ConfigurationDirectoryMode=0750",
-            "ReadWritePaths=/var/mail",
             "Restart=on-failure",
             "NotifyAccess=main",
             "TimeoutStopSec=360",
@@ -378,6 +387,40 @@ credential_id = "discord_webhook"
                 required,
             );
         }
+    }
+
+    #[test]
+    fn service_unit_omits_var_mail_read_write_path_without_local_mail() {
+        // `ReadWritePaths=/var/mail` punches a writable path through
+        // `ProtectSystem=strict`. For Discord-only installs nothing
+        // writes there, so the directive must be absent.
+        let cfg = build_minimal_config(false);
+        let unit = render_service_unit(
+            &cfg,
+            InstallScope::System,
+            std::path::Path::new("/usr/bin/gcit"),
+        );
+        assert!(
+            !unit.contains("ReadWritePaths=/var/mail"),
+            "Discord-only install must NOT emit ReadWritePaths=/var/mail",
+        );
+    }
+
+    #[test]
+    fn service_unit_emits_var_mail_read_write_path_with_local_mail() {
+        // local_mail destinations require write access to /var/mail/<user>.
+        // Pin that the directive is gated on `has_local_mail` and surfaces
+        // alongside the User=gcit / Group=mail pair.
+        let cfg = build_minimal_config(true);
+        let unit = render_service_unit(
+            &cfg,
+            InstallScope::System,
+            std::path::Path::new("/usr/bin/gcit"),
+        );
+        assert!(
+            unit.contains("ReadWritePaths=/var/mail"),
+            "local_mail install must emit ReadWritePaths=/var/mail",
+        );
     }
 
     #[test]

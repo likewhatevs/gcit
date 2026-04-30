@@ -123,12 +123,20 @@ journalctl --user -u gcit -n 100
 For a non-default socket path, pass `--control-socket`. For user-scope
 installs, the default is `$XDG_RUNTIME_DIR/gcit/control.sock`.
 
-### Flow `state` shows `error`
+### Flow `state` shows `errored`
 
 `gcit status` prints a `last_error[kind] at: message` indented under the
-flow header. The kind names the failure category (e.g. `RateLimited`,
-`AuthFailure`, `Network`). For `RateLimited` errors the renderer also
-prints `retry_at: <RFC3339 timestamp>` showing the quota reset window.
+flow header. The kind names the failure category. The emitted values
+are `git_poll_failed` (poll failure), `dispatch` (workflow_dispatch
+failure), `correlate` (run-id correlation failure), `input_render`
+(handlebars input render failure), `state_writer` (state writer
+dropped), `notifier_setup` (notifier construction failure), `credential`
+(credential resolution failure during flow setup), `panic` (task
+panicked), and the synthetic `config_reload` (paired with the
+`(reload)` daemon-level key when SIGHUP fails to parse the new config).
+For `dispatch` and `correlate` errors backed by GitHub's rate-limit
+response, the renderer also prints `retry_at: <RFC3339 timestamp>`
+showing the quota reset window.
 
 ### `(reload)` entries in `gcit status`
 

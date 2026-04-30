@@ -20,7 +20,7 @@
 //   The 64 KiB cap is a generous bound for legitimate mail content
 //   while staying well within memory and disk budgets.
 
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -131,9 +131,9 @@ async fn body_just_over_64_kib_returns_permanent() {
 
 #[tokio::test]
 async fn body_2x_cap_returns_permanent_without_attempting_spool_io() {
-    // 200 KiB body (~3x the cap). The cap check runs at
-    // BEFORE the spool_path() call —
-    // surfacing Permanent without ever opening /var/mail/u.
+    // 200 KiB body (~3x the cap). The cap check runs BEFORE the
+    // spool_path() call — surfacing Permanent without ever opening
+    // /var/mail/u.
     //
     // We can't redirect /var/mail/u to a tempdir without a spool-
     // path-injection knob (separate work item). What we CAN
@@ -325,7 +325,7 @@ async fn body_cap_warn_log_emits_notifier_and_length_fields() {
 
 #[tokio::test]
 async fn body_within_cap_succeeds() {
-    // Body just under the cap. The cap check at notifier.rs L142
+    // Body just under the cap. The cap check inside on_run_complete
     // gates on `body.len() > BODY_BYTE_CAP`; equality + below-cap
     // bodies fall through to the spool open + flock + write +
     // sync_all path. We use `LocalMailNotifier::for_test` to redirect
@@ -525,8 +525,3 @@ impl std::io::Write for SharedBufferWriter {
     }
 }
 
-// Suppress lint on unused module-level `Once` — kept for parity
-// with other mail integration tests that may wire a one-shot
-// initializer in future.
-#[allow(dead_code)]
-static _UNUSED_ONCE: Once = Once::new();

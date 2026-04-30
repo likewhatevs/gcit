@@ -72,7 +72,6 @@ pub enum ConfigError {
     /// the field is no longer overloaded with the failure reason.
     CredentialInvariant {
         path: PathBuf,
-        id: String,
         reason: String,
         consumers: Vec<String>,
     },
@@ -177,7 +176,6 @@ impl fmt::Display for ConfigError {
             }
             ConfigError::CredentialInvariant {
                 path,
-                id: _,
                 reason,
                 consumers,
             } => {
@@ -374,7 +372,6 @@ mod tests {
     fn credential_invariant_display_combines_path_reason_consumers() {
         let e = ConfigError::CredentialInvariant {
             path: PathBuf::from("c.toml"),
-            id: "github_pat".into(),
             reason: "credential file '/etc/gcit/credentials/github_pat' has mode 0644 (group/other readable)".into(),
             consumers: vec!["ci".into()],
         };
@@ -394,15 +391,8 @@ mod tests {
     fn template_compile_display_names_flow_field_and_path() {
         // TemplateError doesn't implement a stable formatted string,
         // so we pin the surrounding scaffold instead of the inner
-        // body. Construct via parsing a deliberately broken template.
-        let inner = handlebars::Handlebars::new()
-            .render_template("{{#if x}}", &serde_json::json!({}))
-            .unwrap_err();
-        // The handlebars `RenderError` is distinct from `TemplateError`,
-        // so we synthesize a TemplateError via the parser API directly
-        // — handlebars exposes `Template::compile` for this.
-        let _ = inner; // unused; we instead use compile below.
-
+        // body. Construct via parsing a deliberately broken template
+        // through `handlebars::Template::compile`.
         let template_err = handlebars::Template::compile("{{#each").expect_err("compile must fail");
 
         let e = ConfigError::TemplateCompile {

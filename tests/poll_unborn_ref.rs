@@ -213,9 +213,9 @@ async fn unborn_ref_then_ref_appears_clears_last_error() {
     // Initial last_sha differs from the scripted Refreshed SHA so
     // `compare_sha(Some(prev), sha_a)` returns trigger:true.
     // `compare_sha(None, _)` returns trigger:false per the
-    // first-observation-baseline rule (see
-    // src/git/strategy.rs::compare_sha) — that path does not
-    // exercise the trigger arm we want to assert.
+    // first-observation-baseline rule in git::strategy::compare_sha
+    // — that path does not exercise the trigger arm we want to
+    // assert.
     let initial_last_sha = Some(sha_filled(0xff));
     let cancel_for_task = cancel.clone();
     let task = tokio::spawn(async move {
@@ -536,8 +536,8 @@ async fn unborn_ref_isolation_one_flow_does_not_starve_another() {
 
 #[tokio::test]
 #[ignore = "covered by `unborn_ref_records_last_error_emits_no_trigger` above (the full message \
-            text is asserted via .contains() on ref + URL) and by the in-module unit tests at \
-            src/flow/poll.rs::tests::unborn_ref_message_* which pin the exact format including \
+            text is asserted via .contains() on ref + URL) and by the in-module unit tests \
+            flow::poll::tests::unborn_ref_message_* which pin the exact format including \
             the 'wait if it's still being pushed' remediation hint"]
 async fn unborn_ref_warn_message_includes_actionable_text() {
     // The last_error message must guide the operator. Pinned by

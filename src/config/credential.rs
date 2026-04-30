@@ -147,10 +147,10 @@ fn validate_id_str(s: &str) -> Result<(), IdError> {
     if s.len() > MAX_LEN {
         return Err(IdError::TooLong { len: s.len() });
     }
-    // Path-traversal substrings are checked before the per-char regex
-    // so the operator gets the more-specific error message. The regex
-    // alone would already reject these, but the explicit check is
-    // mandated.
+    // Path-traversal substrings are checked before the per-char
+    // check so the operator gets the more-specific error message.
+    // The per-char loop alone would already reject these, but the
+    // explicit substring check produces a sharper diagnosis.
     if s.contains("..")
         || s.contains('/')
         || s.contains('\\')

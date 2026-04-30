@@ -21,7 +21,7 @@
 // `reset` (chrono::DateTime<Utc> from the `X-RateLimit-Reset`
 // header, parsed as epoch seconds); `status`/`max_attempts`
 // (server-error context); `timeout` (Duration of the elapsed
-// request, for Timeout). Anything outside the 7 ratified variants
+// request, for Timeout). Anything outside the 11 ratified variants
 // — non-status octocrab errors, future API additions — falls
 // through to `Unknown { source }` so the daemon never crashes on
 // a never-before-seen error shape.
@@ -783,6 +783,15 @@ mod tests {
             },
             GithubErrorKind::DispatchInvalid {
                 workflow: "ci.yml".into(),
+            },
+            GithubErrorKind::Cancelled,
+            GithubErrorKind::BodyTooLarge {
+                declared: Some(20_000_000),
+                limit: 16 * 1024 * 1024,
+            },
+            GithubErrorKind::BodyTooLarge {
+                declared: None,
+                limit: 16 * 1024 * 1024,
             },
         ] {
             assert_eq!(v.retryability(), Retryability::Permanent, "{v:?}");

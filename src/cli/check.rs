@@ -61,8 +61,7 @@ pub fn run(config_path: &Path) -> ExitCode {
     // bucket so a config with both unresolved credentials and a
     // missing spool surfaces both at once. Production passes None
     // for the spool-root override so the probe targets the global
-    // default (`/var/mail`); the soft-warn-at-daemon-start variant
-    // is a separate `ValidateContext` follow-up.
+    // default (`/var/mail`).
     not_found.extend(validate_spool_writability(&cfg, None));
 
     for (id, owners) in &consumers_map {
@@ -198,7 +197,6 @@ fn invariant_to_config_error(
 ) -> ConfigError {
     ConfigError::CredentialInvariant {
         path: path.to_path_buf(),
-        id: id.as_str().to_string(),
         reason: err.render(id, path),
         consumers: owners.to_vec(),
     }
@@ -221,7 +219,6 @@ fn stat_error_to_config_error(
 ) -> ConfigError {
     ConfigError::CredentialInvariant {
         path: path.to_path_buf(),
-        id: id.as_str().to_string(),
         reason: credential_file::render_stat_error(
             err,
             id,

@@ -128,8 +128,8 @@ impl FlowRegistry {
 ///      via the accessor methods below.
 ///
 /// Fields are kept private so the JSON shape over the control
-/// surface stays owned by `cli/status.rs`'s serializer — tests read
-/// via the accessors.
+/// surface stays owned by `flow/supervisor/control.rs`'s
+/// `render_one` serializer — tests read via the accessors.
 #[derive(Debug, Clone)]
 pub struct FlowLastError {
     at: chrono::DateTime<chrono::Utc>,
@@ -156,8 +156,8 @@ impl FlowLastError {
     /// `kind` accessor for the supervisor end-to-end test harness in
     /// tests/poll_unborn_ref.rs. The fields are kept private so the
     /// JSON shape over the control surface is owned by
-    /// cli/status.rs's serializer; tests get read-only views via
-    /// these accessors.
+    /// flow/supervisor/control.rs's render_one serializer; tests get
+    /// read-only views via these accessors.
     pub fn kind(&self) -> &str {
         &self.kind
     }

@@ -187,6 +187,26 @@ async fn append_does_not_seek_within_spool() {
     let user = "u";
     let spool = tmp.path().join(user);
 
+    // Compute the gcit-message size independently by running an
+    // identical notifier setup against a separate, empty spool. The
+    // resulting file size IS the message size (the spool started
+    // empty and the notifier appended one message). Without this
+    // independent measurement, the size assertion would have to
+    // derive `n_appended` from `n_after - n_before`, which is
+    // tautological by construction.
+    let probe_dir = tempfile::TempDir::new().expect("probe tempdir");
+    let probe_spool = probe_dir.path().join(user);
+    std::fs::write(&probe_spool, b"").expect("seed empty probe spool");
+    let probe = notifier_with_subject(probe_dir.path(), user, "no-seek-marker");
+    probe
+        .on_run_complete(&ctx(), &summary_success(), &CancellationToken::new())
+        .await
+        .expect("probe append must succeed");
+    let message_size = std::fs::metadata(&probe_spool)
+        .expect("stat probe spool")
+        .len() as usize;
+    assert!(message_size > 0, "probe must produce a non-empty message");
+
     let prefix = b"X".repeat(1024);
     std::fs::write(&spool, &prefix).expect("seed prefix");
     let n_before = std::fs::metadata(&spool).expect("stat spool").len() as usize;
@@ -199,8 +219,6 @@ async fn append_does_not_seek_within_spool() {
 
     let after = std::fs::read(&spool).expect("read spool");
     let n_after = after.len();
-    let n_appended = n_after - n_before;
-    assert!(n_appended > 0, "append must write some bytes");
 
     // Prefix bytes survive at the start.
     assert!(
@@ -208,11 +226,15 @@ async fn append_does_not_seek_within_spool() {
         "no seek-back: prefix bytes must remain at offset 0..1024",
     );
     // Total file size grew by exactly the message size — proves
-    // the write didn't overlap any of the prefix.
+    // the write didn't overlap any of the prefix. `message_size`
+    // comes from an independent measurement against an empty spool
+    // (above), so this assertion fails if the production write
+    // touched bytes at offset < n_before.
     assert_eq!(
         n_after,
-        n_before + n_appended,
-        "size must equal prefix + message; any overlap would shrink n_appended below the actual message size",
+        n_before + message_size,
+        "size must equal prefix + independently-measured message size; \
+         any overlap with the prefix would shrink n_after below this sum",
     );
 }
 

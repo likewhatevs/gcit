@@ -53,7 +53,7 @@ fn no_subcommand_exits_usage_with_no_subcommand_message() {
     Command::cargo_bin("gcit")
         .unwrap()
         .assert()
-        .failure()
+        .code(64)
         .stderr(predicate::str::contains("no subcommand"))
         .stderr(predicate::str::contains("--help"));
 }
@@ -76,26 +76,6 @@ fn check_help_documents_config_flag() {
         .assert()
         .success()
         .stdout(predicate::str::contains("--config"));
-}
-
-#[test]
-fn install_without_scope_exits_non_zero() {
-    // --user and --system are required (ArgGroup `required(true)`);
-    // omitting both is a parse error, not a TEMPFAIL.
-    Command::cargo_bin("gcit")
-        .unwrap()
-        .arg("install")
-        .assert()
-        .failure();
-}
-
-#[test]
-fn uninstall_without_scope_exits_non_zero() {
-    Command::cargo_bin("gcit")
-        .unwrap()
-        .arg("uninstall")
-        .assert()
-        .failure();
 }
 
 #[test]

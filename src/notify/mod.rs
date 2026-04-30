@@ -7,7 +7,7 @@
 // the dependency graph, both notifier crates pull from the same
 // source of truth.
 //
-// Native `async fn` in traits is used (MSRV 1.85). No
+// Native `async fn` in traits is used (MSRV 1.91). No
 // `#[async_trait::async_trait]` attribute.
 
 use std::time::Duration;
@@ -68,9 +68,9 @@ pub struct ActionInfo {
 pub enum NotifyOutcome {
     /// Notification was delivered. `receipt` is an opaque string the
     /// supervisor can log and surface in `gcit status`. For Discord:
-    /// the message id (when the webhook is invoked with `wait=true`)
-    /// or a synthetic `"sent"` token. For mbox: the absolute spool
-    /// path that was appended to.
+    /// `"webhook:{webhook ID}"` formed from the parsed webhook URL's
+    /// id segment. For mbox: `"file:{path}"` naming the spool path
+    /// that was appended to.
     Sent { receipt: String },
     /// The notifier short-circuited without sending. The reason
     /// distinguishes "wasn't asked to fire on this event" from
@@ -149,7 +149,7 @@ impl NotifyError {
 /// every meaningful destination delivers at least the terminal
 /// summary.
 ///
-/// Native `async fn` in traits per MSRV 1.85; no async-trait dep.
+/// Native `async fn` in traits per MSRV 1.91; no async-trait dep.
 pub trait Notifier: Send + Sync {
     /// Static identifier for the notifier kind (`"discord_webhook"`,
     /// `"local_mail"`, ...). Logs and `gcit status` use this.
@@ -528,5 +528,68 @@ mod tests {
             )
             .unwrap();
         assert_eq!(s, "<b>Alice & Bob</b>");
+    }
+
+    #[test]
+    fn strict_handlebars_data_values_are_not_re_interpreted_as_template() {
+        // Property: handlebars renders a TEMPLATE STRING (trusted, from
+        // config) against DATA (untrusted, from network responses
+        // populating RunContext / RunSummary). Data values must never
+        // re-enter the parser — a malicious upstream value containing
+        // `{{evil}}`, `{{#each ...}}`, or `{{> partial}}` must surface
+        // verbatim in the rendered output, not execute as a template
+        // fragment. This is the load-bearing security property gcit
+        // relies on for handlebars-injection defense (see DESIGN.md
+        // §3 "Handlebars / template security"). The deregistration
+        // tests above prove block helpers fail when present in the
+        // TEMPLATE; this test proves they pass through inert when
+        // present in DATA, which is a different property.
+        let hb = strict_handlebars();
+
+        // (1) Bare mustache literal in data must render as text. The
+        // template references `flow.name`; the data value contains
+        // `{{evil}}` plus a block-helper opener plus a closing tag.
+        // None of those are re-parsed — handlebars renders the value
+        // as a single string.
+        let data = serde_json::json!({
+            "flow": {"name": "{{evil}}{{#each items}}x{{/each}}"},
+        });
+        let out = hb.render_template("{{flow.name}}", &data).unwrap();
+        assert_eq!(
+            out, "{{evil}}{{#each items}}x{{/each}}",
+            "data containing handlebars syntax must render as literal text",
+        );
+
+        // (2) Partial-include syntax in data must also pass through
+        // inert. Partials are not registered on `strict_handlebars` —
+        // an attempt to render a template containing `{{> partial}}`
+        // would fail at template-compile time. This proves the same
+        // syntax is safe inside DATA: it is treated as an opaque
+        // string segment regardless of partial-registration state.
+        let data = serde_json::json!({
+            "flow": {"name": "{{> partial}}"},
+        });
+        let out = hb.render_template("{{flow.name}}", &data).unwrap();
+        assert_eq!(
+            out, "{{> partial}}",
+            "data containing partial-include syntax must render as literal text",
+        );
+
+        // (3) Block-helper closing tag alone (e.g. orphaned `{{/if}}`)
+        // would be a parse error if it appeared in the template. Inside
+        // data it is just bytes. A regression that re-rendered data
+        // through the template parser would either crash or strip the
+        // braces — pin both the literal-equality AND that no
+        // re-rendering happened by checking the byte length matches.
+        let data = serde_json::json!({
+            "flow": {"name": "{{/each}}{{evil}}"},
+        });
+        let out = hb.render_template("{{flow.name}}", &data).unwrap();
+        assert_eq!(out, "{{/each}}{{evil}}");
+        assert_eq!(
+            out.len(),
+            "{{/each}}{{evil}}".len(),
+            "data length must round-trip; a re-parse would strip braces",
+        );
     }
 }

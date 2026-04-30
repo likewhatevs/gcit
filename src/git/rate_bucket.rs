@@ -22,11 +22,12 @@
 //   - `RateBucket::new(min_interval)` constructs an empty bucket.
 //   - `acquire().await` returns once enough time has passed since the
 //     last successful acquire. The first call is always immediate.
-//   - `try_acquire(now)` is the synchronous variant: returns `Ok(())`
-//     and updates the timestamp when permitted, or
+//   - `try_acquire().await` is the non-sleeping variant: returns
+//     `Ok(())` and updates the timestamp when permitted, or
 //     `Err(retry_after: Duration)` when the next slot is in the
-//     future. Used by tests and by callers that prefer a hint over
-//     await.
+//     future. Both variants take the same internal `Mutex`, so
+//     `try_acquire` is async; the difference is that it never
+//     sleeps.
 //
 // Concurrency: the inner state is a `tokio::sync::Mutex<Option<Instant>>`
 // so awaits across the lock are safe. An async lock is overkill for a
@@ -127,13 +128,15 @@ impl RateBucket {
         }
     }
 
-    /// Synchronous variant: returns `Ok(())` immediately when the
+    /// Non-sleeping variant: returns `Ok(())` immediately when the
     /// bucket's window has opened, or `Err(retry_after: Duration)`
-    /// when caller would have to wait.
+    /// when the caller would have to wait. Async because it takes
+    /// the same internal `Mutex` as `acquire`; it just never
+    /// `tokio::time::sleep`s.
     ///
-    /// Useful for non-blocking decision sites (e.g., `gcit trigger
-    /// --dry-run` deciding whether to rate-bucket the synthetic
-    /// request).
+    /// Currently exercised only by the unit tests in this module —
+    /// production paths use `acquire` and let the bucket handle the
+    /// wait.
     pub async fn try_acquire(&self) -> Result<(), Duration> {
         let mut guard = self.last.lock().await;
         let now = Instant::now();

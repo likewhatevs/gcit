@@ -272,7 +272,10 @@ enum FoundRef {
     Direct(gix_hash::ObjectId),
     /// Annotated tag — its own SHA, not the peeled commit's.
     PeeledTag(gix_hash::ObjectId),
-    /// Symbolic ref (e.g. HEAD) — the resolved object SHA.
+    /// Symbolic ref (e.g. HEAD). Carries the annotated tag SHA when
+    /// the resolved target is an annotated tag (`Symbolic.tag` is
+    /// `Some`), or the resolved object SHA otherwise. Tag SHA wins so
+    /// re-tagging is detectable, matching the `PeeledTag` arm.
     Symbolic(gix_hash::ObjectId),
     /// Remote reports the ref as unborn (empty repository).
     Unborn,
@@ -283,6 +286,13 @@ enum FoundRef {
 /// Match `ref_name` against each ref in the remote's list. Pure
 /// function — extracted from poll_blocking for unit testing without
 /// the network.
+///
+/// `Symbolic.tag` is `Some(annotated_tag_sha)` when the symbolic ref
+/// resolves through an annotated tag (per the gix-protocol Ref enum
+/// docs); when it is `Some` we return the tag SHA so re-tagging is
+/// detectable, matching the `Peeled` branch's "tag SHA wins"
+/// behaviour. When `tag` is `None` (lightweight tag or non-tag
+/// target) we fall back to the resolved object SHA.
 fn find_ref(refs: &[handshake::Ref], ref_name: &str) -> FoundRef {
     let target = ref_name.as_bytes();
     for r in refs {
@@ -297,8 +307,11 @@ fn find_ref(refs: &[handshake::Ref], ref_name: &str) -> FoundRef {
             handshake::Ref::Symbolic {
                 full_ref_name,
                 object,
+                tag,
                 ..
-            } if full_ref_name.as_bstr() == target => return FoundRef::Symbolic(*object),
+            } if full_ref_name.as_bstr() == target => {
+                return FoundRef::Symbolic(tag.unwrap_or(*object));
+            }
             handshake::Ref::Unborn { full_ref_name, .. } if full_ref_name.as_bstr() == target => {
                 return FoundRef::Unborn
             }
@@ -377,11 +390,49 @@ mod tests {
         }
     }
 
+    fn make_symbolic_with_tag(
+        name: &str,
+        target: &str,
+        tag: ObjectId,
+        object: ObjectId,
+    ) -> handshake::Ref {
+        handshake::Ref::Symbolic {
+            full_ref_name: BString::from(name),
+            target: BString::from(target),
+            tag: Some(tag),
+            object,
+        }
+    }
+
     #[test]
     fn find_symbolic_ref() {
         let refs = vec![make_symbolic("HEAD", "refs/heads/main", sha(0xcc))];
         match find_ref(&refs, "HEAD") {
             FoundRef::Symbolic(o) => assert_eq!(o, sha(0xcc)),
+            other => panic!("expected Symbolic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn find_symbolic_ref_targeting_annotated_tag_returns_tag_sha() {
+        // When a symbolic ref ultimately resolves through an annotated
+        // tag, gix-protocol populates `Symbolic.tag` with the tag SHA
+        // and `Symbolic.object` with the peeled commit. We return the
+        // TAG SHA so re-tagging is detectable, mirroring the
+        // `PeeledTag` behaviour for direct annotated-tag refs.
+        let tag = sha(0x40);
+        let commit = sha(0x50);
+        let refs = vec![make_symbolic_with_tag(
+            "HEAD",
+            "refs/tags/v1.0",
+            tag,
+            commit,
+        )];
+        match find_ref(&refs, "HEAD") {
+            FoundRef::Symbolic(o) => assert_eq!(
+                o, tag,
+                "Symbolic ref pointing at an annotated tag must return tag SHA, not commit SHA",
+            ),
             other => panic!("expected Symbolic, got {other:?}"),
         }
     }

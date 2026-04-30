@@ -205,19 +205,28 @@ pub async fn correlate(
         .build();
 
     let mut attempts: u32 = 0;
+    // Anchor for the drain deadline. `None` until we first observe
+    // `cancel.is_cancelled()`; on that observation we capture the
+    // current Instant once and reuse it on every subsequent iteration
+    // so the drain budget cannot slide forward by recomputing
+    // `now + DRAIN_TIMEOUT` each loop. Without the anchor a
+    // long-running poll cycle would keep extending the drain deadline
+    // and the supervisor's shutdown bound would never fire.
+    let mut drain_start: Option<Instant> = None;
 
     loop {
         attempts += 1;
 
         // Compute the effective deadline for this iteration. If
-        // drain has fired, take the lesser of (remaining normal,
-        // DRAIN_TIMEOUT from drain-onset).
+        // drain has fired, take the lesser of (normal_deadline,
+        // drain_start + DRAIN_TIMEOUT).
         let now = Instant::now();
         let effective_deadline = if cancel.is_cancelled() {
-            // Anchor the drain deadline at the moment we observe
-            // the cancellation. Use the lesser of (normal_deadline,
-            // now + DRAIN_TIMEOUT).
-            let drain_deadline = now + DRAIN_TIMEOUT;
+            // Capture the drain anchor on the first observation;
+            // reuse it thereafter so the drain budget is bounded by
+            // the actual cancel onset, not by `now`.
+            let onset = *drain_start.get_or_insert(now);
+            let drain_deadline = onset + DRAIN_TIMEOUT;
             std::cmp::min(normal_deadline, drain_deadline)
         } else {
             normal_deadline
@@ -371,7 +380,15 @@ async fn scan_runs_for_match(
 
         // Walk to the next page, if any.
         match current.next.clone() {
-            Some(uri) => match next_page(client, rate_limit, uri).await? {
+            Some(uri) => match next_page(
+                client,
+                rate_limit,
+                &params.repo,
+                &params.workflow,
+                uri,
+            )
+            .await?
+            {
                 Some(p) => current = p,
                 None => break,
             },
@@ -424,7 +441,15 @@ async fn scan_runs_for_fallback(
             break;
         }
         match current.next.clone() {
-            Some(uri) => match next_page(client, rate_limit, uri).await? {
+            Some(uri) => match next_page(
+                client,
+                rate_limit,
+                &params.repo,
+                &params.workflow,
+                uri,
+            )
+            .await?
+            {
                 Some(p) => current = p,
                 None => break,
             },
@@ -467,12 +492,19 @@ async fn list_runs_page(
 }
 
 /// Walk to the next page via classified_get so observe_headers fires.
+/// `repo` and `workflow` are threaded through so that any 404 surfaced
+/// by the pagination link carries the same path context the caller's
+/// initial request did, rather than collapsing to an empty-string
+/// "/repos//actions/workflows/" message.
 async fn next_page(
     client: &Client,
     rate_limit: &super::rate_limit::RateLimitState,
+    repo: &str,
+    workflow: &str,
     uri: http::Uri,
 ) -> Result<Option<Page<Run>>, GithubErrorKind> {
-    let page: Page<Run> = super::client::classified_get(client, rate_limit, "", "", uri).await?;
+    let page: Page<Run> =
+        super::client::classified_get(client, rate_limit, repo, workflow, uri).await?;
     Ok(Some(page))
 }
 
@@ -480,13 +512,17 @@ async fn next_page(
 /// jobs come from a separate list_jobs call (the monitor handles
 /// that — see `monitor.rs`); for the correlation outcome we leave
 /// `jobs` empty and let the monitor populate it.
+///
+/// `run.run_number` is `i64` in octocrab; `try_from` produces 0 for
+/// the impossible-negative case rather than panicking on cast or
+/// silently wrapping.
 pub fn run_to_summary(run: &Run) -> RunSummary {
     let conclusion = run.conclusion.as_deref().map(Conclusion::from_api);
     let status = RunStatus::from_api(&run.status);
     RunSummary {
         run_id: run.id.0,
         run_url: run.html_url.to_string(),
-        run_number: run.run_number as u64,
+        run_number: u64::try_from(run.run_number).unwrap_or(0),
         run_attempt: 1,
         status,
         conclusion,
@@ -530,10 +566,13 @@ pub fn job_to_result(job: &octocrab::models::workflows::Job) -> JobResult {
     }
 }
 
+/// Convert an octocrab `Step` into gcit's `StepResult`. `step.number`
+/// is `i64` in octocrab; `try_from` produces 0 for the impossible-
+/// negative case rather than panicking on cast or silently wrapping.
 pub fn step_to_result(step: &octocrab::models::workflows::Step) -> StepResult {
     StepResult {
         name: step.name.clone(),
-        number: step.number as u32,
+        number: u32::try_from(step.number).unwrap_or(0),
         conclusion: step.conclusion.as_ref().map(map_conclusion),
         started_at: step.started_at,
         completed_at: step.completed_at,

@@ -396,8 +396,8 @@ pub(super) async fn spawn_flow(
         ref_name: flow.source.ref_name.clone(),
         effective_poll: effective,
         rate_bucket: source_rate_bucket,
-        octo: cred_resources.octocrab.clone(),
-        reqwest: cred_resources.reqwest.clone(),
+        octo: Some(cred_resources.octocrab.clone()),
+        reqwest: Some(cred_resources.reqwest.clone()),
         last_errors: Arc::clone(&ctx.last_errors),
     };
     let poll_state_tx = ctx.state_tx.clone();

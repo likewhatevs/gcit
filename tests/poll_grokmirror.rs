@@ -145,8 +145,7 @@ fn extract_repo_path_from_kernel_url() {
 /// Full HTTP fetch path: stand up a wiremock server, serve a gzipped
 /// manifest at `/manifest.js.gz`, and assert `fetch_manifest` parses
 /// it end-to-end. Pins:
-///   - the URL shape `<base>/manifest.js.gz` (per build_manifest_url
-///     at src/git/grokmirror.rs:188)
+///   - the URL shape `<base>/manifest.js.gz` (per build_manifest_url)
 ///   - that the raw gzipped body decompresses without reqwest's gzip
 ///     feature getting in the way (kernel.org does NOT set
 ///     Content-Encoding: gzip on the static .gz file, so reqwest must
@@ -206,12 +205,12 @@ async fn fetch_manifest_returns_parsed_body_for_200_response() {
 
 /// HTTP 503 from the manifest endpoint maps to
 /// `GrokmirrorError::Transient` per the `status.is_server_error()`
-/// arm at src/git/grokmirror.rs:117-126. The supervisor retries on
-/// Transient — a regression that turned 5xx into Permanent would
-/// stop polling forever after the first hiccup. 503 is the realistic
-/// upstream-overload signal kernel.org's grokmirror returns under
-/// load; pinning it (rather than a generic 500) anchors the test to
-/// the operator-visible failure mode.
+/// arm in fetch_manifest_inner. The supervisor retries on Transient
+/// — a regression that turned 5xx into Permanent would stop polling
+/// forever after the first hiccup. 503 is the realistic upstream-
+/// overload signal kernel.org's grokmirror returns under load;
+/// pinning it (rather than a generic 500) anchors the test to the
+/// operator-visible failure mode.
 #[tokio::test]
 async fn fetch_manifest_503_returns_transient_error() {
     let mock = MockServer::start().await;
@@ -238,10 +237,10 @@ async fn fetch_manifest_503_returns_transient_error() {
 }
 
 /// HTTP 404 from the manifest endpoint maps to
-/// `GrokmirrorError::Permanent` per the trailing arm at
-/// src/git/grokmirror.rs:127-133 (any non-success, non-5xx status).
-/// 404 means the operator pointed gcit at a host that does not
-/// publish a grokmirror manifest at all — retrying will not help.
+/// `GrokmirrorError::Permanent` per the trailing arm in
+/// fetch_manifest_inner (any non-success, non-5xx status). 404
+/// means the operator pointed gcit at a host that does not publish
+/// a grokmirror manifest at all — retrying will not help.
 #[tokio::test]
 async fn fetch_manifest_404_returns_permanent_error() {
     let mock = MockServer::start().await;
@@ -303,13 +302,12 @@ async fn fetch_manifest_pins_manifest_js_gz_path() {
     // the count would be 0 and Drop would panic.
 }
 
-/// `build_manifest_url` (src/git/grokmirror.rs:188-191) trims a
-/// trailing slash from the base URL before appending
-/// `/manifest.js.gz`. If the trim regresses, the request would go to
-/// `<base>//manifest.js.gz` and either 404 or hit a non-matching
-/// wiremock route. Pin the trim by passing a base URL with a
-/// trailing slash and asserting the request still resolves at the
-/// expected path.
+/// `build_manifest_url` trims a trailing slash from the base URL
+/// before appending `/manifest.js.gz`. If the trim regresses, the
+/// request would go to `<base>//manifest.js.gz` and either 404 or
+/// hit a non-matching wiremock route. Pin the trim by passing a
+/// base URL with a trailing slash and asserting the request still
+/// resolves at the expected path.
 #[tokio::test]
 async fn fetch_manifest_handles_trailing_slash_in_base_url() {
     let mock = MockServer::start().await;
@@ -336,8 +334,8 @@ async fn fetch_manifest_handles_trailing_slash_in_base_url() {
     );
 }
 
-/// Pins the Content-Length pre-check at src/git/grokmirror.rs:141-149:
-/// when the server advertises a body larger than `MAX_COMPRESSED_BYTES`
+/// Pins the Content-Length pre-check in fetch_manifest_inner: when
+/// the server advertises a body larger than `MAX_COMPRESSED_BYTES`
 /// (64 MiB), the strategy rejects with `Permanent` BEFORE allocating
 /// or streaming a multi-GB buffer.
 ///
@@ -353,16 +351,15 @@ async fn fetch_manifest_handles_trailing_slash_in_base_url() {
 /// which masks the real cap-check arm.
 ///
 /// Real coverage exists for the streaming-counter arm via the
-/// in-module `parse_rejects_decompressed_over_cap` test
-/// (src/git/grokmirror.rs::tests at the file's bottom) — that one
-/// pins the post-decompression cap on a synthetic body. The
-/// pre-check via Content-Length is unreachable from a wiremock
-/// fixture without swapping the HTTP server for a hand-rolled
-/// hyper service. The 64 MiB body brief explicitly skipped is the
-/// other path; both lead to the same Permanent-cap rejection in
-/// production. Re-enable this test if the scaffolding gains a
-/// mechanism to override Content-Length without hyper rejecting
-/// the body shape.
+/// in-module `parse_rejects_decompressed_over_cap` test in the
+/// grokmirror module's bottom tests block — that one pins the
+/// post-decompression cap on a synthetic body. The pre-check via
+/// Content-Length is unreachable from a wiremock fixture without
+/// swapping the HTTP server for a hand-rolled hyper service. The
+/// 64 MiB body brief explicitly skipped is the other path; both
+/// lead to the same Permanent-cap rejection in production. Re-enable
+/// this test if the scaffolding gains a mechanism to override
+/// Content-Length without hyper rejecting the body shape.
 #[tokio::test]
 #[ignore = "hyper rejects mismatched Content-Length custom header — connection breaks before pre-check fires"]
 async fn fetch_manifest_oversized_content_length_returns_permanent() {

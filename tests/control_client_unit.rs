@@ -7,8 +7,8 @@
 // independently of the binary harness.
 //
 // Wire format mirror: 4-byte big-endian u32 length prefix, body is
-// serde_json bytes (src/control/client.rs:32-41,
-// src/control/protocol.rs:22).
+// serde_json bytes (per the LengthDelimitedCodec builder in
+// control::client and the MAX_FRAME_LEN constant in control::protocol).
 
 use std::time::{Duration, Instant};
 
@@ -29,7 +29,7 @@ fn bind_listener(dir: &TempDir) -> (UnixListener, std::path::PathBuf) {
 }
 
 /// Wrap an accepted stream in the same LengthDelimitedCodec the
-/// production server uses (src/control/server.rs uses the same builder
+/// production server uses (control::server uses the same builder
 /// shape). Pinning these knobs in the test helper guards against a
 /// regression in either side that would silently break wire
 /// compatibility.
@@ -44,8 +44,8 @@ fn wrap_server(stream: UnixStream) -> Framed<UnixStream, LengthDelimitedCodec> {
 
 #[tokio::test]
 async fn connect_to_nonexistent_path_returns_io_error() {
-    // src/control/client.rs:31-32 calls UnixStream::connect which
-    // fails with NotFound for a path that never existed. Client::connect
+    // Client::connect calls UnixStream::connect which fails with
+    // NotFound for a path that never existed. Client::connect
     // forwards that error verbatim via the `?`. Pinned at the unit
     // level so a regression that wraps the error or drops the kind
     // surfaces in the unit test rather than only in the CLI tests.
@@ -131,11 +131,11 @@ async fn send_round_trips_request_id_through_response() {
 
 #[tokio::test]
 async fn send_returns_error_when_response_id_does_not_match_request_id() {
-    // src/control/client.rs:66-72 enforces id correlation: a response
-    // whose id does not equal the request's id is rejected with
-    // io::Error::other so a multiplexing client cannot accidentally
-    // consume an unrelated reply. Drive the mismatch path: server
-    // replies with a different uuid → client's send returns Err.
+    // Client::send enforces id correlation: a response whose id does
+    // not equal the request's id is rejected with io::Error::other
+    // so a multiplexing client cannot accidentally consume an
+    // unrelated reply. Drive the mismatch path: server replies with
+    // a different uuid → client's send returns Err.
     let td = TempDir::new().unwrap();
     let (listener, path) = bind_listener(&td);
     let request_id = Uuid::new_v4();
@@ -180,12 +180,12 @@ async fn send_returns_error_when_response_id_does_not_match_request_id() {
 
 #[tokio::test]
 async fn send_returns_unexpected_eof_when_server_closes_before_replying() {
-    // src/control/client.rs:58-61 maps `Ok(None)` from the codec
-    // stream to `io::Error::new(UnexpectedEof, "control connection
-    // closed before response")`. Drive that path: the server accepts,
-    // reads the frame, then drops the connection without writing any
-    // reply. The client's framed.next() yields None on EOF; send must
-    // surface UnexpectedEof.
+    // Client::send maps `Ok(None)` from the codec stream to
+    // `io::Error::new(UnexpectedEof, "control connection closed
+    // before response")`. Drive that path: the server accepts, reads
+    // the frame, then drops the connection without writing any
+    // reply. The client's framed.next() yields None on EOF; send
+    // must surface UnexpectedEof.
     let td = TempDir::new().unwrap();
     let (listener, path) = bind_listener(&td);
 
@@ -218,9 +218,9 @@ async fn send_returns_unexpected_eof_when_server_closes_before_replying() {
 
 #[tokio::test]
 async fn send_returns_timed_out_when_server_holds_open_without_replying() {
-    // src/control/client.rs:52-57 wraps the framed.next() poll in a
-    // tokio::time::timeout against READ_TIMEOUT_SECS=5 (per
-    // protocol.rs:29). When that elapses, send returns
+    // Client::send wraps the framed.next() poll in a
+    // tokio::time::timeout against READ_TIMEOUT_SECS=5 (defined in
+    // control::protocol). When that elapses, send returns
     // io::Error::new(TimedOut, "control reply timed out after 5s").
     //
     // Driving a real 5-second wall-clock test would be slow; instead

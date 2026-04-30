@@ -23,7 +23,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use twilight_http::Client as TwilightClient;
 use twilight_model::id::marker::WebhookMarker;
 use twilight_model::id::Id;
@@ -151,7 +151,9 @@ pub enum ParseWebhookUrlError {
     /// (`discord.com`, `discordapp.com`, `ptb.discord.com`,
     /// `canary.discord.com`). Refuse to send webhook payloads to
     /// arbitrary hosts.
-    #[error("webhook host '{host}' is not allowed; expected discord.com or discordapp.com")]
+    #[error(
+        "webhook host '{host}' is not allowed; expected discord.com, discordapp.com, ptb.discord.com, or canary.discord.com"
+    )]
     HostNotAllowed { host: String },
 
     /// The path doesn't have the `/api/webhooks/{id}/{token}` shape.
@@ -260,16 +262,11 @@ pub fn is_discord_host(host: &str) -> bool {
     )
 }
 
-/// Expose the secret token for the dispatch path. Forces the call
-/// site to opt in to viewing the secret bytes (`token.expose()`),
-/// matching the secrecy crate's intent.
-pub fn expose_token(token: &SecretString) -> &str {
-    token.expose_secret()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use secrecy::ExposeSecret;
 
     use crate::util::ensure_crypto_provider;
 
@@ -278,7 +275,7 @@ mod tests {
         let url = "https://discord.com/api/webhooks/1234567890/abcDEFxyz";
         let parsed = parse_webhook_url(url).expect("parse");
         assert_eq!(parsed.id.get(), 1234567890);
-        assert_eq!(expose_token(&parsed.token), "abcDEFxyz");
+        assert_eq!(parsed.token.expose_secret(), "abcDEFxyz");
     }
 
     #[test]
@@ -286,7 +283,7 @@ mod tests {
         let url = "https://discordapp.com/api/webhooks/42/tokvalue";
         let parsed = parse_webhook_url(url).expect("parse");
         assert_eq!(parsed.id.get(), 42);
-        assert_eq!(expose_token(&parsed.token), "tokvalue");
+        assert_eq!(parsed.token.expose_secret(), "tokvalue");
     }
 
     #[test]

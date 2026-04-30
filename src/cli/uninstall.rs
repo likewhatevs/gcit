@@ -14,9 +14,12 @@
 //   - State directory is preserved.
 //   - daemon-reload via the user session bus, or hint for --system.
 //   - If the manifest has `user_required: "gcit"`, print the userdel
-//     reminder (gcit never created the account itself; only the
-//     operator's matching `useradd` from install time should be
-//     reversed if the operator decides to).
+//     reminder. The wording branches on
+//     `manifest.user_created_by_install`: when install ran the
+//     `useradd` (the manifest flag is true), the reminder offers a
+//     reverse `userdel`; when the account pre-existed at install
+//     time (flag is false), uninstall declines to propose removing
+//     it.
 
 use std::fs;
 use std::path::{Path, PathBuf};

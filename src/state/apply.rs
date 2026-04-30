@@ -8,10 +8,14 @@
 //
 // The shape of `State` here pins the on-disk JSON format. Producers
 // dispatch `StateUpdate` over the mpsc channel; the writer thread
-// applies them in order via `State::apply`. `apply` is intentionally a
-// pure function of (current state, update) — no side effects, no
-// hidden state, no logging. Test skeletons under tests/state_*.rs
-// drive every variant + interleaving combination.
+// applies them in order via `State::apply`. `apply` is a pure
+// function of (current state, update) for state mutation; the only
+// side effect is `tracing::warn!` on diagnostic edges (duplicate
+// RunStarted, RunFinished against an unknown flow or run id,
+// FlowRemoved against an unknown flow) — these route through the
+// global subscriber and never affect the function's return. Test
+// skeletons under tests/state_*.rs drive every variant +
+// interleaving combination.
 //
 // `last_sha` is stored on disk as a 40-char (or 64-char for sha256)
 // hex string rather than a tagged-enum `gix_hash::ObjectId`. This
@@ -114,9 +118,11 @@ pub struct RunState {
     ///
     /// Stored as `Option<String>` rather than `Option<Conclusion>`
     /// for forward-compat: state.json round-trips across gcit
-    /// versions even when the `Conclusion` enum gains new variants. A
-    /// typed enum here would force a breaking schema bump on every
-    /// new variant; the loose String tolerates additions.
+    /// versions even when the `Conclusion` enum gains new variants.
+    /// `Conclusion` does carry `#[serde(other)] Unknown` so a typed
+    /// enum here would deserialize unknown variants without a schema
+    /// bump, but the raw string preserves the original API value
+    /// across persistence rather than collapsing it to Unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conclusion: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

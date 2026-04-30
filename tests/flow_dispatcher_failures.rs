@@ -108,7 +108,7 @@ async fn dispatch_failure_401_surfaces_as_dispatch_kind_no_run_started() {
     //
     // `#[traced_test]` captures tracing events into an in-memory buffer.
     // After observing the failure, the test mirrors what
-    // `dispatcher::run` does (src/flow/dispatcher.rs:425) — call
+    // `dispatcher::run` does — call
     // `record_last_error("dispatch", err_msg, ...)` — and asserts that
     // (1) the tracing event surfaces the `kind` discriminator and
     // (2) the message body retains the `dispatch:` prefix. This pins
@@ -162,15 +162,14 @@ async fn dispatch_failure_401_surfaces_as_dispatch_kind_no_run_started() {
         "401 dispatch must not emit RunStarted",
     );
 
-    // Mirror dispatcher::run's failure-recording side effect (see
-    // src/flow/dispatcher.rs::run, lines 419-433): on Err from
-    // handle_trigger, the production loop emits a `warn!` + calls
+    // Mirror dispatcher::run's failure-recording side effect: on Err
+    // from handle_trigger, the production loop emits a `warn!` + calls
     // `record_last_error("dispatch", ..., e.message, ...)`. The
-    // integration test cannot drive the run loop directly — handle_trigger
-    // is the seam — so we replay the recording call here. The kind
-    // discriminator is the leading word before the `:` in the err
-    // message ("dispatch" for this path); the message body is the full
-    // err string.
+    // integration test cannot drive the run loop directly —
+    // handle_trigger is the seam — so we replay the recording call
+    // here. The kind discriminator is the leading word before the
+    // `:` in the err message ("dispatch" for this path); the message
+    // body is the full err string.
     let kind = err_msg
         .split_once(':')
         .map(|(k, _)| k)
@@ -205,16 +204,16 @@ async fn dispatch_failure_401_surfaces_as_dispatch_kind_no_run_started() {
 #[tokio::test]
 async fn correlate_permanent_error_surfaces_as_correlate_kind_no_run_started() {
     // dispatch succeeds (204), correlate's first list-runs hits 401
-    // (permanent). The correlator's `if !e.is_transient()` branch at
-    // src/github/correlator.rs:289 short-circuits the polling loop
-    // and returns the GithubErrorKind via CorrelationError::Github,
-    // which the flow dispatcher surfaces with the `correlate:` kind
-    // prefix per `DispatchError::from_correlation_error`.
+    // (permanent). The correlator's `if !e.is_transient()` branch
+    // short-circuits the polling loop and returns the
+    // GithubErrorKind via CorrelationError::Github, which the flow
+    // dispatcher surfaces with the `correlate:` kind prefix per
+    // `DispatchError::from_correlation_error`.
     //
     // 401 (Unauthorized) is permanent in `GithubErrorKind::is_transient`
-    // (see Retryability::Permanent for Unauthorized in
-    // src/github/error.rs); using it here avoids the transient-retry
-    // polling loop a 5xx would force, keeping the test bounded.
+    // (Retryability::Permanent for Unauthorized in github::error);
+    // using it here avoids the transient-retry polling loop a 5xx
+    // would force, keeping the test bounded.
     common::ensure_crypto_provider();
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
@@ -312,7 +311,7 @@ async fn input_render_failure_surfaces_as_input_render_kind_no_http() {
     // `handle_trigger_for_test` returns `Err(e.message)`. The message
     // body for input-render failures is built by
     // `DispatchError::from_message("input_render", format!("input render failed: {e}"))`
-    // (src/flow/dispatcher.rs::handle_trigger). Pin both the
+    // inside flow::dispatcher::handle_trigger. Pin both the
     // template-render description and the offending variable name —
     // either drift surfaces here.
     assert!(
@@ -348,11 +347,11 @@ async fn dispatch_cancelled_in_rate_limit_defer_surfaces_no_run_started() {
     // seeding the rate-limit snapshot with `remaining=0` and a future
     // reset 1 hour out — `should_defer` returns Some(remaining_until_reset),
     // putting `dispatch()` into the `tokio::select!` between cancel and
-    // sleep (src/github/dispatcher.rs:221-227). Cancel fires after a
-    // short delay; the cancel arm wins and dispatch returns
-    // GithubErrorKind::Cancelled (Permanent), which the flow dispatcher
-    // surfaces as `dispatch:` (the "{stage}: {e}" format includes the
-    // Cancelled Display message after the prefix).
+    // sleep. Cancel fires after a short delay; the cancel arm wins
+    // and dispatch returns GithubErrorKind::Cancelled (Permanent),
+    // which the flow dispatcher surfaces as `dispatch:` (the
+    // "{stage}: {e}" format includes the Cancelled Display message
+    // after the prefix).
     //
     // This is the bounded-cancel test: it pins the cancel branch of
     // dispatch() in <1s without depending on the correlator's 30s

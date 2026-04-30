@@ -57,8 +57,8 @@ daemon supervisor so they agree on what counts as a usable credential.
 ### Mode
 
 The file mode bitmask must satisfy `mode & 0o077 == 0`. Any mode whose
-group and other bits are all clear qualifies — `0400`, `0500`, `0600`,
-`0700` all pass; `0640` and `0644` are rejected.
+group and other bits are all clear qualifies — `0400`, `0600`, `0700`
+are typical examples; `0640` and `0644` are rejected.
 
 The recommended canonical form is `0600`. Failed mode checks render a
 single-line operator-facing message including the offending mode and a

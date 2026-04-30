@@ -190,7 +190,7 @@ pub fn classify_status(status: StatusCode, message: &str) -> GithubError {
         return GithubError::Permanent {
             message: format!(
                 "github 403 (permission denied): {message} — \
-                 verify the PAT has `Actions: read+write` for the target repo",
+                 verify the PAT has `Contents: read` for the target repo",
             ),
         };
     }
@@ -278,7 +278,7 @@ mod tests {
         match err {
             GithubError::Permanent { message } => {
                 assert!(
-                    message.contains("Actions: read+write"),
+                    message.contains("Contents: read"),
                     "actionable hint missing: {message}",
                 );
             }

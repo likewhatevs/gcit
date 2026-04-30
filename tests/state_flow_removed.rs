@@ -1,5 +1,6 @@
 // FlowRemoved cleanup.
-// StateUpdate::FlowRemoved is one of four variants.
+// StateUpdate::FlowRemoved is one of five variants (PollObservation,
+// PollTimestamp, RunStarted, RunFinished, FlowRemoved).
 // Flow removal during in-flight dispatch: removing a flow from config
 // (and reloading) while a dispatched workflow run is still in flight
 // may result in the workflow run completing without notification.

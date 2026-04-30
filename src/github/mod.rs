@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize};
 /// (`success`, `skipped`, `neutral`, `failure`, `timed_out`,
 /// `cancelled`, `action_required`). Anything else (`stale`,
 /// `startup_failure`, NULL, garbage, future additions) maps to
-/// `Unknown` so the daemon never crashes on a new API string — a
-/// WARN log captures the raw value for operator
-/// follow-up.
+/// `Unknown` so the daemon never crashes on a new API string. The
+/// raw value is not retained — `#[serde(other)]` discards it and
+/// `from_api` collapses unrecognised inputs to the catch-all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

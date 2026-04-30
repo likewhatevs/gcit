@@ -261,7 +261,8 @@ Initial release.
 - Notifiers (`Notifier` trait with native `async fn`):
   - Discord webhook via twilight: programmatic embeds with conclusion
     coloring, configurable handlebars templates with `set_strict_mode(true)`,
-    and host allowlist (`discord.com` / `discordapp.com` only).
+    and host allowlist (`discord.com`, `discordapp.com`, `ptb.discord.com`,
+    `canary.discord.com`).
   - Local mail: appends mboxrd-formatted messages to `/var/mail/<user>` with
     `O_NOFOLLOW`, `flock(LOCK_EX)`, and `fsync`. Header-injection defense
     replaces control bytes in rendered headers; body capped at 64 KiB.
@@ -308,9 +309,10 @@ Initial release.
   poll loop does not seed its baseline from a SHA observed against a
   different repo. Cached credentials are invalidated up front so a
   rotated PAT is picked up without a daemon restart.
-- Tracing with `tracing-subscriber` + journald layer. Log filter overridable
-  via `--log-filter`, `RUST_LOG`-style env, or config (`[log] filter = ...`)
-  with CLI > env > config precedence.
+- Tracing with `tracing-subscriber` + journald layer. The `--log-filter`
+  CLI flag is the only operative source. The config-file `[log] filter`
+  field is parsed but not yet wired into log init; gcit does not honour
+  any `RUST_LOG`-style env var. The built-in default is `info,gcit=debug`.
 - Reproducible release builds: `vergen-gix` embeds the git SHA into
   `gcit --version`. Static binary build target verified in CI
   (`x86_64-unknown-linux-musl`, asserted via `file`).

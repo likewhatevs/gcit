@@ -77,9 +77,9 @@ fn message_starts_with_from_separator_line() {
 #[case::leap_window(2, true)]
 fn asctime_format_pads_day_with_space(#[case] day: u32, #[case] expect_double_space: bool) {
     // chrono's `%e` formatter is the asctime space-padded day; `%d`
-    // is zero-padded ("02"). Production at src/mail/mbox.rs:30 uses
-    // `%e`, so single-digit days must produce a leading SPACE in
-    // the day position (e.g., "Jan  5"), not a leading ZERO ("Jan 05").
+    // is zero-padded ("02"). format_from_line_date uses `%e`, so
+    // single-digit days must produce a leading SPACE in the day
+    // position (e.g., "Jan  5"), not a leading ZERO ("Jan 05").
     //
     // The assertion strategy is robust to local-timezone shifts:
     // we don't pin an exact day; we pin whether the formatted
@@ -122,7 +122,7 @@ fn asctime_format_pads_day_with_space(#[case] day: u32, #[case] expect_double_sp
 #[test]
 fn headers_block_separated_from_body_by_single_blank_line() {
     // Single blank line ('\n\n' boundary) divides headers from body.
-    // The full message structure (per src/mail/mbox.rs:151-199):
+    // The full message structure (per format_message in mail::mbox):
     //   <From line>\n
     //   Date: <rfc5322>\n
     //   From: gcit@<host>\n
@@ -170,7 +170,7 @@ fn message_ends_with_trailing_blank_line() {
     // Per RFC 4155, each mbox record ends with a blank line so the
     // next "From " separator can start at column 0. format_message
     // ensures this via the explicit trailing '\n' followed by the
-    // record terminator '\n' (src/mail/mbox.rs:192-196).
+    // record terminator '\n'.
     //
     // Mutation target: omitting the trailing newline; two
     // consecutive messages have no separator and the second
@@ -237,7 +237,7 @@ fn headers_are_canonical_set_in_order() {
 fn date_header_uses_rfc5322_format() {
     // Date header carries an RFC 5322 fixed-format date:
     //   "Mon, 02 Jan 2026 15:04:05 +0000"
-    // Production formatter at src/mail/mbox.rs:34 is:
+    // format_rfc5322_date emits the chrono format string
     //   "%a, %d %b %Y %H:%M:%S %z"
     // Day-of-month is zero-padded (%d) — different from the From_
     // line's space-padded %e.
@@ -293,9 +293,9 @@ fn date_header_uses_rfc5322_format() {
 
 #[test]
 fn from_header_is_gcit_at_hostname() {
-    // From header is `gcit@<hostname>`. The hostname argument is
-    // passed through `sanitize_header` (src/mail/mbox.rs:170) but
-    // ASCII hostnames pass through verbatim.
+    // From header is `gcit@<hostname>`. format_message passes the
+    // hostname argument through `sanitize_header` but ASCII hostnames
+    // pass through verbatim.
     let msg = format_message(fixed_now(), "alice", "host.example", "subj", "body");
     let from_line = msg
         .lines()
@@ -306,9 +306,9 @@ fn from_header_is_gcit_at_hostname() {
 
 #[test]
 fn to_header_is_user_at_hostname() {
-    // To header is `<user>@<hostname>`. Both fields run through
-    // `sanitize_header` (src/mail/mbox.rs:174-176) and concatenate
-    // around a literal '@'.
+    // To header is `<user>@<hostname>`. format_message runs both
+    // fields through `sanitize_header` and concatenates them around
+    // a literal '@'.
     let msg = format_message(fixed_now(), "ops", "host.example", "subj", "body");
     let to_line = msg
         .lines()
@@ -372,13 +372,12 @@ fn subject_arg_appears_in_subject_header_verbatim() {
     // The handlebars rendering for subject lives one layer up
     // (LocalMailNotifier::on_run_complete renders the template
     // before calling format_message). At the format_message layer
-    // the subject argument is passed through `sanitize_header`
-    // (src/mail/mbox.rs:179-180); ASCII strings pass through
-    // verbatim.
+    // the subject argument is passed through `sanitize_header`;
+    // ASCII strings pass through verbatim.
     //
     // Note on the original stub's claim of a default
     // "{{flow.name}}: {{run.conclusion}}" template: the production
-    // default at src/mail/notifier.rs:118-124 is actually
+    // default in mail::notifier::on_run_complete is actually
     // `format!("[gcit] {} {}", flow_name, label)` — a Rust format!
     // call, not a handlebars template. Custom subject handlebars
     // rendering at the notifier layer is covered by the

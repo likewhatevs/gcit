@@ -15,7 +15,7 @@
 // covers the clap-parser layer + the two early-exit branches that
 // don't write any state: missing config, manifest not found.
 //
-// Exit codes (per src/cli/exit.rs / sysexits):
+// Exit codes (per cli::exit / sysexits):
 //   * 0   = OK
 //   * 64  = USAGE       (EX_USAGE; clap parse error, missing arg group)
 //   * 71  = OSERR       (EX_OSERR; HOME unresolvable, manifest schema
@@ -286,7 +286,7 @@ fn install_help_documents_system_install_path_hint() {
 
 #[test]
 fn install_without_scope_flag_is_rejected_by_required_arg_group_with_usage_64() {
-    // The clap ArgGroup `install_scope` (src/bin/gcit.rs:137) is
+    // The clap ArgGroup `install_scope` on InstallArgs is
     // `required(true)`. Bare `gcit install` with no scope flag fails
     // ArgGroup validation; clap emits a parse error which
     // `bin/gcit.rs::async_main` maps to EX_USAGE=64. Pin that the
@@ -303,9 +303,9 @@ fn install_without_scope_flag_is_rejected_by_required_arg_group_with_usage_64() 
 
 #[test]
 fn uninstall_without_scope_flag_is_rejected_by_required_arg_group_with_usage_64() {
-    // Same shape as install — UninstallArgs at src/bin/gcit.rs:154 has
-    // its own `uninstall_scope` ArgGroup `required(true)`. Bare
-    // `gcit uninstall` is a parse error → EX_USAGE=64.
+    // Same shape as install — UninstallArgs has its own
+    // `uninstall_scope` ArgGroup `required(true)`. Bare `gcit
+    // uninstall` is a parse error → EX_USAGE=64.
     Command::cargo_bin("gcit")
         .unwrap()
         .arg("uninstall")
@@ -318,12 +318,12 @@ fn uninstall_without_scope_flag_is_rejected_by_required_arg_group_with_usage_64(
 #[test]
 fn install_user_with_malformed_config_toml_exits_config_78() {
     // `gcit install --user --config <malformed-toml>` fails inside
-    // `cli::install::run` at the `config::load(config_path)` call
-    // (src/cli/install.rs:120-128). The loader returns Err with one or
-    // more parse diagnostics; `run` prints each to stderr and exits
-    // EX_CONFIG=78. The existing tests only cover the missing-file case
-    // (config-load returns Err with NotFound shape); this test exercises
-    // the parse-failure shape, which is a different `errors` payload.
+    // `cli::install::run` at the `config::load(config_path)` call.
+    // The loader returns Err with one or more parse diagnostics;
+    // `run` prints each to stderr and exits EX_CONFIG=78. The existing
+    // tests only cover the missing-file case (config-load returns Err
+    // with NotFound shape); this test exercises the parse-failure
+    // shape, which is a different `errors` payload.
     let td = TempDir::new().unwrap();
     let bad_config = td.path().join("malformed.toml");
     // A TOML key with a missing value is a parse error rather than a
@@ -343,20 +343,20 @@ fn install_user_with_malformed_config_toml_exits_config_78() {
 fn install_user_non_interactive_with_valid_config_writes_files_and_exits_zero() {
     // End-to-end success path. `gcit install --user --non-interactive
     // --force` against a Discord-only minimal config:
-    //   * config::load succeeds (line 120-128)
+    //   * config::load succeeds
     //   * has_local_mail=false, so the --user + local_mail rejection
-    //     at line 139-147 does NOT fire
+    //     does NOT fire
     //   * has_local_mail=false, so ensure_static_user is NOT called
-    //     (line 242-252) — no useradd, no mail-group requirement
-    //   * --non-interactive skips the [y/N] prompt (line 218-235)
-    //   * --force overrides any pre-existing-file refusal (line 200-216);
-    //     a fresh tempdir has nothing pre-existing so it doesn't matter
-    //     here, but we pass it for robustness against parallel test runs
+    //     — no useradd, no mail-group requirement
+    //   * --non-interactive skips the [y/N] prompt
+    //   * --force overrides any pre-existing-file refusal; a fresh
+    //     tempdir has nothing pre-existing so it doesn't matter here,
+    //     but we pass it for robustness against parallel test runs
     //   * write_outputs writes the three managed files into the
-    //     tempdir-rooted XDG layout (resolved at install.rs:156 via
-    //     install_paths) and the manifest under XDG_STATE_HOME
+    //     tempdir-rooted XDG layout (resolved via install_paths) and
+    //     the manifest under XDG_STATE_HOME
     //   * trigger_daemon_reload on the user session bus may fail in CI
-    //     (no session bus); install.rs:284-289 only emits a `warning:`
+    //     (no session bus); the install path only emits a `warning:`
     //     and continues — exit code stays OK
     //
     // Pin that all three managed files exist on disk after the run +
@@ -375,7 +375,7 @@ fn install_user_non_interactive_with_valid_config_writes_files_and_exits_zero() 
 
     // Verify the wizard wrote every file the manifest tracks. Paths
     // mirror `install_paths(InstallScope::User, $HOME)` from
-    // src/systemd/unit.rs:54-72 with tempdir-rooted XDG.
+    // systemd::unit with tempdir-rooted XDG.
     let xdg_config = td.path().join(".config");
     let xdg_state = td.path().join(".local").join("state");
     let units_dir = xdg_config.join("systemd").join("user");
@@ -403,14 +403,14 @@ fn install_user_non_interactive_with_valid_config_writes_files_and_exits_zero() 
 #[test]
 fn install_user_interactive_with_closed_stdin_cancels_and_exits_zero() {
     // Without `--non-interactive`, the wizard prints "Proceed? [y/N] "
-    // and reads stdin (src/cli/install.rs:218-228). assert_cmd's
+    // and reads stdin (cli::install's interactive prompt). assert_cmd's
     // default `.assert()` provides a closed stdin (EOF on first read);
     // `io::stdin().read_line(&mut answer)` returns Ok(0), leaving
     // `answer` empty. The empty string does not match
     // `"y"|"Y"|"yes"|"YES"|"Yes"` → "install cancelled; nothing written."
-    // → exit::OK. Pin that the interactive cancel arm at line 230-234
-    // exits cleanly without writing files (operator changing their
-    // mind is not a failure).
+    // → exit::OK. Pin that the interactive cancel arm exits cleanly
+    // without writing files (operator changing their mind is not a
+    // failure).
     let td = TempDir::new().unwrap();
     let config = write_minimal_config(td.path());
     isolated_command(td.path())
@@ -437,15 +437,15 @@ fn uninstall_system_force_without_existing_manifest_exits_config_78() {
     // Mirrors `uninstall_user_force_without_existing_manifest_still_exits_config_78`
     // for the system scope. `gcit uninstall --system --force` reads the
     // manifest at the system-scope path (`/var/lib/gcit/.install-manifest.json`
-    // per InstallPaths::System at src/systemd/unit.rs:79) which does not
-    // exist for any test environment. read_manifest returns Err → exit 78.
-    // --force overrides operator-modified-files gating but does NOT
-    // bypass manifest read; without a manifest there's nothing to
-    // override. The test environment runs as a non-root user, so the
-    // manifest read attempt against /var/lib/gcit/.install-manifest.json
+    // per InstallPaths::System) which does not exist for any test
+    // environment. read_manifest returns Err → exit 78. --force
+    // overrides operator-modified-files gating but does NOT bypass
+    // manifest read; without a manifest there's nothing to override.
+    // The test environment runs as a non-root user, so the manifest
+    // read attempt against /var/lib/gcit/.install-manifest.json
     // returns NotFound (or PermissionDenied if /var/lib is not
     // accessible) — both surface as Err and route through the same
-    // EX_CONFIG=78 arm at src/cli/uninstall.rs:46-53.
+    // EX_CONFIG=78 arm in cli::uninstall::run.
     let td = TempDir::new().unwrap();
     isolated_command(td.path())
         .arg("uninstall")
@@ -461,7 +461,7 @@ fn uninstall_system_force_without_existing_manifest_exits_config_78() {
 
 /// Resolve the user-scope managed paths the install wizard writes to
 /// under `home_dir`. Mirrors `install_paths(InstallScope::User, &home)`
-/// at src/systemd/unit.rs:54-72 with $XDG_* envs from `isolated_command`.
+/// in systemd::unit with $XDG_* envs from `isolated_command`.
 fn user_scope_paths(home_dir: &Path) -> UserScopePaths {
     let xdg_config = home_dir.join(".config");
     let xdg_state = home_dir.join(".local").join("state");
@@ -501,11 +501,10 @@ fn run_user_install(home_dir: &Path, config_path: &Path) {
 
 // ---------------------------------------------------------------------
 // install --user + local_mail rejection arm.
-// src/cli/install.rs:139-147 — --user scope plus a local_mail
-// destination is rejected up-front because /var/mail/<user> requires
-// the static `mail` group and the per-user systemd manager cannot
-// useradd into it. Pinned at this level so a regression that drops
-// the early-return surfaces.
+// cli::install::run rejects --user scope plus a local_mail destination
+// up-front because /var/mail/<user> requires the static `mail` group
+// and the per-user systemd manager cannot useradd into it. Pinned at
+// this level so a regression that drops the early-return surfaces.
 // ---------------------------------------------------------------------
 
 const LOCAL_MAIL_CONFIG_TOML: &str = "[[flow]]\n\
@@ -534,11 +533,11 @@ fn write_local_mail_config(dir: &Path) -> std::path::PathBuf {
 
 #[test]
 fn install_user_with_local_mail_destination_rejected_with_usage_64() {
-    // src/cli/install.rs:139-147 rejects --user + local_mail with a
-    // clear error pointing at /var/mail's group requirement, mapping
-    // to EX_USAGE=64. Pinned: stderr includes "/var/mail" and
-    // "Re-run with --system" so an operator's first read of the
-    // message names the fix.
+    // cli::install::run rejects --user + local_mail with a clear
+    // error pointing at /var/mail's group requirement, mapping to
+    // EX_USAGE=64. Pinned: stderr includes "/var/mail" and "Re-run
+    // with --system" so an operator's first read of the message
+    // names the fix.
     let td = TempDir::new().unwrap();
     let cfg = write_local_mail_config(td.path());
     isolated_command(td.path())
@@ -555,17 +554,16 @@ fn install_user_with_local_mail_destination_rejected_with_usage_64() {
 
 // ---------------------------------------------------------------------
 // install refuse-silent-overwrite arm.
-// src/cli/install.rs:200-216 — without `--force`, an existing managed
-// file at any output path causes an early exit 78 with the file
-// listed in stderr. Pinned: exit code AND the canonical "refusing
-// silent overwrite" wording.
+// Without `--force`, cli::install::run's existing-file detection
+// causes an early exit 78 with the file listed in stderr. Pinned:
+// exit code AND the canonical "refusing silent overwrite" wording.
 // ---------------------------------------------------------------------
 
 #[test]
 fn install_user_refuses_silent_overwrite_without_force_exits_config_78() {
     // Pre-create one of the managed paths (the service unit) under the
     // tempdir-rooted XDG layout BEFORE running install. With no --force,
-    // the existing-file detection at install.rs:200-216 fires and the
+    // the existing-file detection in cli::install::run fires and the
     // wizard exits 78 without overwriting anything.
     let td = TempDir::new().unwrap();
     let cfg = write_minimal_config(td.path());
@@ -599,8 +597,8 @@ fn install_user_refuses_silent_overwrite_without_force_exits_config_78() {
 
 #[test]
 fn install_user_force_overwrites_pre_existing_managed_files_and_exits_zero() {
-    // Same setup as above but with `--force`. Per src/cli/install.rs:200,
-    // the `if !force` block is skipped entirely, so existing-file
+    // Same setup as above but with `--force`. The `if !force` block
+    // in cli::install::run is skipped entirely, so existing-file
     // detection does not fire and write_outputs proceeds.
     let td = TempDir::new().unwrap();
     let cfg = write_minimal_config(td.path());
@@ -627,8 +625,8 @@ fn install_user_force_overwrites_pre_existing_managed_files_and_exits_zero() {
         "--force must overwrite the pre-existing sentinel content",
     );
     // The replacement content is a real systemd unit; pin a known
-    // marker that render_service_unit always emits per
-    // src/systemd/unit.rs (Description= header).
+    // marker that render_service_unit always emits in systemd::unit
+    // (Description= header).
     let after_str = String::from_utf8_lossy(&after);
     assert!(
         after_str.contains("[Unit]") && after_str.contains("[Service]"),
@@ -641,10 +639,10 @@ fn install_user_force_overwrites_pre_existing_managed_files_and_exits_zero() {
 fn install_user_idempotent_double_run_with_force_exits_zero_both_times() {
     // Run install --force twice in a row. The first run writes fresh
     // files; the second run encounters them, but --force keeps
-    // exit 0 per src/cli/install.rs:200's `if !force` guard. Pin
-    // the manifest still resolves to a parseable JSON after the
-    // second run (a regression that left the manifest half-written
-    // would break uninstall).
+    // exit 0 per cli::install::run's `if !force` guard. Pin the
+    // manifest still resolves to a parseable JSON after the second
+    // run (a regression that left the manifest half-written would
+    // break uninstall).
     let td = TempDir::new().unwrap();
     let cfg = write_minimal_config(td.path());
     let paths = user_scope_paths(td.path());
@@ -678,10 +676,10 @@ fn install_user_idempotent_double_run_with_force_exits_zero_both_times() {
 
 // ---------------------------------------------------------------------
 // install credential walkthrough "✓ already configured" short-circuit.
-// src/cli/install.rs:383-397 — when a credential file exists at the
-// canonical path with mode bitmask `mode & 0o077 == 0` and is owned
-// by the invoking euid OR root, the wizard prints a one-line
-// confirmation instead of the full instructions.
+// In cli::install's credential walkthrough, when a credential file
+// exists at the canonical path with mode bitmask `mode & 0o077 == 0`
+// and is owned by the invoking euid OR root, the wizard prints a
+// one-line confirmation instead of the full instructions.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -714,9 +712,9 @@ fn install_user_with_pre_configured_credential_file_emits_check_marker_in_walkth
     assert_eq!(output.status.code(), Some(0), "install must succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     // The pre-configured credential lines surface with the canonical
-    // ✓ marker per src/cli/install.rs:388-394. A regression that
-    // dropped the short-circuit would re-print the full "obtain at:" /
-    // "chmod" instructions instead.
+    // ✓ marker emitted by the credential walkthrough's short-circuit
+    // arm. A regression that dropped the short-circuit would re-print
+    // the full "obtain at:" / "chmod" instructions instead.
     assert!(
         stdout.contains("✓ github_pat"),
         "stdout must surface the ✓ short-circuit for github_pat; got: {stdout}",
@@ -788,10 +786,10 @@ fn uninstall_user_after_successful_install_removes_all_managed_files_and_exits_z
 
 #[test]
 fn uninstall_user_after_install_with_modified_file_without_force_refuses_with_oserr_71() {
-    // src/cli/uninstall.rs:109-120 refuses to remove an
-    // operator-modified file without --force, exiting 71 (EX_OSERR).
-    // The manifest sha mismatch surfaces in stderr with both the
-    // recorded and on-disk shas.
+    // cli::uninstall::run refuses to remove an operator-modified
+    // file without --force, exiting 71 (EX_OSERR). The manifest sha
+    // mismatch surfaces in stderr with both the recorded and on-disk
+    // shas.
     let td = TempDir::new().unwrap();
     let cfg = write_minimal_config(td.path());
     let paths = user_scope_paths(td.path());
@@ -828,9 +826,9 @@ fn uninstall_user_after_install_with_modified_file_without_force_refuses_with_os
 
 #[test]
 fn uninstall_user_after_install_with_modified_file_force_overrides_and_exits_zero() {
-    // Same setup as above but with --force. Per the comment at
-    // src/cli/uninstall.rs:111, --force overrides the sha-mismatch
-    // gate; uninstall completes and removes the tampered file.
+    // Same setup as above but with --force. Per the comment in
+    // cli::uninstall::run, --force overrides the sha-mismatch gate;
+    // uninstall completes and removes the tampered file.
     let td = TempDir::new().unwrap();
     let cfg = write_minimal_config(td.path());
     let paths = user_scope_paths(td.path());
@@ -857,10 +855,10 @@ fn uninstall_user_after_install_with_modified_file_force_overrides_and_exits_zer
 
 #[test]
 fn uninstall_user_with_schema_version_mismatch_exits_oserr_71() {
-    // src/cli/uninstall.rs:55-60 rejects a manifest whose
-    // schema_version differs from MANIFEST_SCHEMA_VERSION (currently 1
-    // per src/cli/install.rs:55). EX_OSERR=71 distinguishes this from
-    // the manifest-not-found case (EX_CONFIG=78).
+    // cli::uninstall::run rejects a manifest whose schema_version
+    // differs from MANIFEST_SCHEMA_VERSION (currently 1 per
+    // cli::install). EX_OSERR=71 distinguishes this from the
+    // manifest-not-found case (EX_CONFIG=78).
     let td = TempDir::new().unwrap();
     let paths = user_scope_paths(td.path());
 
@@ -881,7 +879,7 @@ fn uninstall_user_with_schema_version_mismatch_exits_oserr_71() {
 
 #[test]
 fn uninstall_user_with_path_outside_install_roots_exits_oserr_71() {
-    // src/cli/uninstall.rs:73-82 refuses any manifest entry that
+    // cli::uninstall::run refuses any manifest entry that
     // canonicalizes outside the expected_roots derived from
     // install_paths. Hand-write a manifest pointing at a tempdir-rooted
     // file OUTSIDE the user-scope managed dirs (e.g. directly under
@@ -929,7 +927,7 @@ fn uninstall_user_with_path_outside_install_roots_exits_oserr_71() {
 }
 
 /// SHA-256 hex of `bytes`, lower-case. Uses the sha2 crate that the
-/// production install code already depends on (see src/cli/install.rs).
+/// production install code already depends on (see cli::install).
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -940,10 +938,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 // ---------------------------------------------------------------------
 // Source-side credential walkthrough emits the SourceFetch hint when
 // no other credential reference upgrades the kind.
-// src/cli/install.rs:413-415 — CredentialKindHint::SourceFetch prints
-// "kind: source-side fetch credential". This arm fires only when
-// collect_credential_uses leaves a SourceFetch reference unupgraded
-// (no Action/Discord reference for the same id, per validate.rs:603-609).
+// CredentialKindHint::SourceFetch prints "kind: source-side fetch
+// credential". This arm fires only when collect_credential_uses
+// leaves a SourceFetch reference unupgraded (no Action/Discord
+// reference for the same id).
 // ---------------------------------------------------------------------
 
 const SOURCE_FETCH_CREDENTIAL_CONFIG_TOML: &str = "[[flow]]\n\
@@ -967,11 +965,11 @@ const SOURCE_FETCH_CREDENTIAL_CONFIG_TOML: &str = "[[flow]]\n\
 
 #[test]
 fn install_user_walkthrough_surfaces_source_fetch_kind_hint_for_source_only_credential() {
-    // The walkthrough at src/cli/install.rs:399-419 prints a
-    // per-credential block; for a credential id referenced ONLY from
-    // [flow.source] (and not also from [flow.action] /
-    // [[flow.destination]]) the kind hint stays at SourceFetch and
-    // the line "kind: source-side fetch credential" surfaces.
+    // The cli::install walkthrough prints a per-credential block;
+    // for a credential id referenced ONLY from [flow.source] (and not
+    // also from [flow.action] / [[flow.destination]]) the kind hint
+    // stays at SourceFetch and the line "kind: source-side fetch
+    // credential" surfaces.
     //
     // Pin: with `source_only_cred` referenced only from [flow.source],
     // the install stdout includes the SourceFetch line for that id.
@@ -1000,7 +998,7 @@ fn install_user_walkthrough_surfaces_source_fetch_kind_hint_for_source_only_cred
         "stdout must surface SourceFetch kind hint for source_only_cred; got: {stdout}",
     );
     // The id name itself must surface in the credential walkthrough
-    // header (src/cli/install.rs:399).
+    // header.
     assert!(
         stdout.contains("source_only_cred"),
         "stdout must surface the credential id; got: {stdout}",
@@ -1008,7 +1006,7 @@ fn install_user_walkthrough_surfaces_source_fetch_kind_hint_for_source_only_cred
 }
 
 // ---------------------------------------------------------------------
-// Path preview "[exists]" tag arm at src/cli/install.rs:521. Existing
+// Path preview "[exists]" tag arm in cli::install. Existing
 // install_user_force_overwrites_pre_existing_managed_files_and_exits_zero
 // covers the [exists] -> overwrite pipeline; this test pins the
 // stdout-visible "[exists]" tag specifically (a regression that
@@ -1049,9 +1047,9 @@ fn install_user_force_with_pre_existing_managed_file_prints_exists_tag_in_path_p
 
 // ---------------------------------------------------------------------
 // Uninstall when a managed file was already deleted by the operator.
-// src/cli/uninstall.rs:88-95 + 126-130 — "File already gone — nothing
-// to remove. Not an error". The remaining managed files are removed
-// normally, the manifest is removed last, and exit is 0.
+// cli::uninstall::run treats "file already gone" as a no-op rather
+// than an error. The remaining managed files are removed normally,
+// the manifest is removed last, and exit is 0.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -1063,8 +1061,8 @@ fn uninstall_user_with_pre_deleted_managed_file_succeeds_and_removes_remaining()
     run_user_install(td.path(), &cfg);
     // Operator manually removes the socket unit BEFORE running
     // uninstall. The manifest still references it; the sha-mismatch
-    // gate at line 88-107 sees `path.exists() == false` and skips
-    // the file via `continue`, so no "operator-modified" error fires.
+    // gate sees `path.exists() == false` and skips the file via
+    // `continue`, so no "operator-modified" error fires.
     assert!(paths.socket_unit.exists());
     std::fs::remove_file(&paths.socket_unit).expect("remove pre-uninstall");
     assert!(!paths.socket_unit.exists(), "pre-deletion staged");
@@ -1075,8 +1073,9 @@ fn uninstall_user_with_pre_deleted_managed_file_succeeds_and_removes_remaining()
         .assert()
         .code(0);
 
-    // Remaining managed files are gone too — the loop at uninstall.rs:
-    // 126-135 removes every entry whose path still exists.
+    // Remaining managed files are gone too — the remove loop in
+    // cli::uninstall::run removes every entry whose path still
+    // exists.
     assert!(
         !paths.service_unit.exists(),
         "uninstall must remove the still-present service unit",
@@ -1093,12 +1092,11 @@ fn uninstall_user_with_pre_deleted_managed_file_succeeds_and_removes_remaining()
 
 // ---------------------------------------------------------------------
 // Uninstall when a managed file has been replaced by a symlink. The
-// symlink-defense arm at src/cli/uninstall.rs:206-216 inside
-// validate_manifest_path rejects any manifest entry where
-// `symlink_metadata` reports a symlink, EVEN when --force is passed.
-// The recorded sha256 was over the original file content — following
-// the symlink would let an attacker substitute arbitrary content for
-// the manifest's intended target.
+// symlink-defense arm inside validate_manifest_path rejects any
+// manifest entry where `symlink_metadata` reports a symlink, EVEN
+// when --force is passed. The recorded sha256 was over the original
+// file content — following the symlink would let an attacker
+// substitute arbitrary content for the manifest's intended target.
 // ---------------------------------------------------------------------
 
 #[test]
@@ -1120,7 +1118,7 @@ fn uninstall_user_with_managed_file_replaced_by_symlink_rejected_with_oserr_71()
     symlink(&target, &paths.service_unit).expect("create symlink");
 
     // --force is OFF so a sha mismatch would fire ANYWAY; the
-    // symlink defense fires FIRST per the order at uninstall.rs:73-82
+    // symlink defense fires FIRST per the order in cli::uninstall::run
     // (path validation runs before sha verification).
     isolated_command(td.path())
         .arg("uninstall")
@@ -1150,10 +1148,10 @@ fn uninstall_user_with_managed_file_replaced_by_symlink_rejected_with_oserr_71()
 
 // ---------------------------------------------------------------------
 // Uninstall with manifest entries pointing INSIDE expected_roots but
-// where the file is missing. The path-validation branch at
-// src/cli/uninstall.rs:226 (`Err(_) if !path.exists() => return Ok(())`)
+// where the file is missing. The path-validation branch in
+// validate_manifest_path (`Err(_) if !path.exists() => return Ok(())`)
 // returns Ok for paths that don't canonicalize but also don't exist.
-// The sha-verify loop at line 88-95 then skips the entry via
+// The sha-verify loop then skips the entry via
 // `if !entry.path.exists() { continue; }`. Net behavior: missing
 // files inside expected_roots are no-ops and the uninstall succeeds.
 // ---------------------------------------------------------------------
@@ -1167,15 +1165,15 @@ fn uninstall_user_with_manifest_entries_inside_roots_but_missing_succeeds() {
     // Build a manifest by hand. Every entry's path canonicalizes to
     // somewhere INSIDE the user-scope managed dirs (units_dir, config
     // dir), but the files themselves do not exist on disk. The
-    // validate_manifest_path arm at uninstall.rs:226 returns Ok for
-    // missing paths inside the roots (they can't canonicalize but
-    // they don't exist so removal will no-op). The sha-verify loop at
-    // line 88-95 skips them via `!entry.path.exists()`. The remove
-    // loop at 126-135 also skips them via the same predicate.
+    // validate_manifest_path arm returns Ok for missing paths inside
+    // the roots (they can't canonicalize but they don't exist so
+    // removal will no-op). The sha-verify loop skips them via
+    // `!entry.path.exists()`. The remove loop also skips them via
+    // the same predicate.
     std::fs::create_dir_all(paths.manifest.parent().unwrap()).unwrap();
     // We need expected_roots to canonicalize successfully. Pre-create
     // the parent dirs of the managed files so canonicalize on them
-    // returns Ok inside expected_roots() at uninstall.rs:189-197.
+    // returns Ok inside expected_roots().
     std::fs::create_dir_all(paths.service_unit.parent().unwrap()).unwrap();
     std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
 
@@ -1196,7 +1194,7 @@ fn uninstall_user_with_manifest_entries_inside_roots_but_missing_succeeds() {
         .assert()
         .code(0);
 
-    // Manifest itself is removed at the end (uninstall.rs:147-157).
+    // Manifest itself is removed at the end of cli::uninstall::run.
     assert!(
         !paths.manifest.exists(),
         "uninstall must remove the manifest after a missing-files run",
@@ -1210,8 +1208,8 @@ fn uninstall_user_with_manifest_entries_inside_roots_but_missing_succeeds() {
 // post-install state matches the no-source-credential path (manifest
 // + units present). The source-credential code path differs from the
 // destination-only path because walk_credentials emits a SourceFetch
-// reference (config/mod.rs:67-72) before any other reference; this test
-// pins that the install completes cleanly when that branch fires.
+// reference before any other reference; this test pins that the
+// install completes cleanly when that branch fires.
 // ---------------------------------------------------------------------
 
 #[test]

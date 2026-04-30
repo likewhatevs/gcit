@@ -110,11 +110,11 @@ pub(super) struct GithubCredentialResources {
     pub(super) rate_limit: Arc<RateLimitState>,
     /// Octocrab handle reused by the GithubApi poll strategy when the
     /// flow's source URL also points at github.com.
-    pub(super) octocrab: Option<Arc<octocrab::Octocrab>>,
+    pub(super) octocrab: Arc<octocrab::Octocrab>,
     /// Reqwest handle reused by the Grokmirror poll strategy. Built
     /// at boot from `config.http.request_timeout` and shared across
     /// every credential.
-    pub(super) reqwest: Option<Arc<reqwest::Client>>,
+    pub(super) reqwest: Arc<reqwest::Client>,
     /// Cancellation token owned by the rate-limit poller task.
     /// `CredentialPool::invalidate_except` calls `cancel()` on every
     /// dropped entry's token before removing it so an SIGHUP credential
@@ -286,8 +286,8 @@ impl CredentialPool {
         let handle = tokio::spawn(async move {
             gh_rate_limit::poll_loop(rl_client, rl_state, rl_cancel_for_task).await;
         });
-        let octocrab = Some(Arc::new(github_client.octocrab().clone()));
-        let reqwest = Some(shared_reqwest);
+        let octocrab = Arc::new(github_client.octocrab().clone());
+        let reqwest = shared_reqwest;
         let r = Arc::new(GithubCredentialResources {
             github_client,
             rate_bucket,

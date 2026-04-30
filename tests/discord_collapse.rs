@@ -192,7 +192,7 @@ fn collapse_with_conclusion_none_does_not_collapse() {
     // operator can use to see what's pending).
     //
     // The implementation is `summary.conclusion.map(should_collapse)
-    // .unwrap_or(false)` at src/discord/embed.rs:76-79. This test
+    // .unwrap_or(false)` inside build_run_complete_embed. This test
     // pins the unwrap_or default — flipping it to `true` would
     // collapse every progress event into a single Summary field.
     let hb = strict_handlebars();

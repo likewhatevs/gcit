@@ -230,8 +230,8 @@ pub async fn run_with_factories(
     // 10. Build per-flow notifier vectors + dispatch wiring, then spawn.
     // `respawning_flows` tracks flows that have observed a panic and
     // have a respawn timer in flight but have not yet been respawned.
-    // Distinct from `flow_handles` so a clean exit of one role does
-    // not silently mark the surviving panicking sibling as
+    // Distinct from `registry.handles` so a clean exit of one role
+    // does not silently mark the surviving panicking sibling as
     // "already-respawning" and skip the respawn (the bug fixed by
     // tracking respawn state explicitly rather than inferring it
     // from handle membership).

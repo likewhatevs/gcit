@@ -255,7 +255,7 @@ async fn list_all_jobs(
             return Ok(out);
         }
         match current.next.clone() {
-            Some(uri) => match next_jobs_page(client, rate_limit, uri).await? {
+            Some(uri) => match next_jobs_page(client, rate_limit, params, uri).await? {
                 Some(p) => current = p,
                 None => break,
             },
@@ -268,9 +268,12 @@ async fn list_all_jobs(
 async fn next_jobs_page(
     client: &Client,
     rate_limit: &RateLimitState,
+    params: &MonitorParams,
     uri: http::Uri,
 ) -> Result<Option<Page<Job>>, GithubErrorKind> {
-    let page: Page<Job> = super::client::classified_get(client, rate_limit, "", "", uri).await?;
+    let page: Page<Job> =
+        super::client::classified_get(client, rate_limit, &params.repo, &params.workflow, uri)
+            .await?;
     Ok(Some(page))
 }
 
@@ -289,21 +292,9 @@ fn uri_or_unknown(path: &str) -> Result<http::Uri, GithubErrorKind> {
 /// assert it.
 pub const DEFAULT_JOB_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Helper: should the supervisor stop the monitor when it sees
-/// this status? Mirrors RunStatus::is_terminal but is the canonical
-/// "stop polling" gate from the monitor's perspective; the only
-/// terminal status is Completed.
-pub fn is_terminal(status: RunStatus) -> bool {
-    status.is_terminal()
-}
-
-/// Build the JobResult vector empty (used by tests + state-writer
-/// snapshots when no jobs have been observed yet).
-pub fn empty_jobs() -> Vec<JobResult> {
-    Vec::new()
-}
-
-/// Build the StepResult equivalent — present for symmetry.
+/// Build a placeholder `RunSummary` with `run_id` and default
+/// fields. Used by tests + state-writer snapshots when a real
+/// monitor poll has not yet observed the run.
 pub fn empty_run_summary(run_id: u64) -> RunSummary {
     RunSummary {
         run_id,
@@ -329,19 +320,6 @@ mod tests {
     }
 
     #[test]
-    fn is_terminal_only_when_completed() {
-        assert!(is_terminal(RunStatus::Completed));
-        for s in [
-            RunStatus::Queued,
-            RunStatus::InProgress,
-            RunStatus::Waiting,
-            RunStatus::Unknown,
-        ] {
-            assert!(!is_terminal(s), "{s:?} must not be terminal");
-        }
-    }
-
-    #[test]
     fn max_jobs_constants_pinned() {
         assert_eq!(MAX_JOBS_PER_RUN, 1000);
         assert_eq!(MAX_JOBS_PAGES, 10);
@@ -355,12 +333,6 @@ mod tests {
         assert_eq!(s.conclusion, None);
         assert_eq!(s.run_attempt, 1);
         assert!(s.jobs.is_empty());
-    }
-
-    #[test]
-    fn empty_jobs_returns_empty_vec() {
-        let v = empty_jobs();
-        assert!(v.is_empty());
     }
 
     #[test]

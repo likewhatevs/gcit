@@ -209,9 +209,9 @@ async fn render_strict_mode_missing_var_in_subject_returns_permanent() {
 
 #[tokio::test]
 async fn render_strict_mode_missing_var_in_body_returns_permanent() {
-    // Same shape as the subject test but for body — wraps as
-    // "body render failed: ..." (src/mail/notifier.rs around
-    // L131-135).
+    // Same shape as the subject test but for body — the body branch
+    // of mail::notifier::on_run_complete wraps as "body render
+    // failed: ...".
     let n = LocalMailNotifier::new(
         "test",
         "myuser",

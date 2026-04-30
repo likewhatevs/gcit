@@ -315,9 +315,10 @@ async fn multiple_requests_on_one_connection_each_dispatched() {
 }
 
 /// Handler stub that returns Err from every method. Drives the
-/// `Err(message) => Response::Error` arm in dispatch (server.rs:
-/// 290-326). MockHandler always returns Ok, so without this stub the
-/// per-arm Err mapping is uncovered.
+/// `Err(message) => Response::Error` arm in dispatch (per the
+/// per-request-kind dispatch arms in control::server). MockHandler
+/// always returns Ok, so without this stub the per-arm Err mapping
+/// is uncovered.
 #[derive(Default)]
 struct ErrHandler;
 
@@ -357,9 +358,10 @@ fn spawn_err_server() -> (UnixStream, tokio::task::JoinHandle<()>) {
 
 #[tokio::test]
 async fn trigger_handler_err_routes_to_response_error() {
-    // server.rs:290-293 — when handler.trigger returns Err, dispatch
-    // builds Response::Error{id, message}. Pin: the response carries
-    // the request id verbatim AND the handler's error message body.
+    // The Trigger arm of dispatch — when handler.trigger returns Err,
+    // dispatch builds Response::Error{id, message}. Pin: the response
+    // carries the request id verbatim AND the handler's error message
+    // body.
     let (mut client, server) = spawn_err_server();
     let id = Uuid::new_v4();
     let req = Request::Trigger {
@@ -385,9 +387,9 @@ async fn trigger_handler_err_routes_to_response_error() {
 
 #[tokio::test]
 async fn status_handler_err_routes_to_response_error() {
-    // server.rs:294-296 — same shape as trigger but for the Status
-    // arm. Pin per-arm so a regression that swapped error routing
-    // (e.g. forgot to return early on Err) surfaces here.
+    // Same shape as trigger but for the Status arm of dispatch. Pin
+    // per-arm so a regression that swapped error routing (e.g.
+    // forgot to return early on Err) surfaces here.
     let (mut client, server) = spawn_err_server();
     let id = Uuid::new_v4();
     let req = Request::Status { id, flow: None };
@@ -406,10 +408,10 @@ async fn status_handler_err_routes_to_response_error() {
 
 #[tokio::test]
 async fn reload_handler_err_routes_to_response_error_after_gate_acquire() {
-    // server.rs:318-321 — after the rate-limit gate acquires (fresh
-    // ReloadGate from handle_connection_for_test always lets the
-    // first reload through), if handler.reload returns Err the
-    // dispatch builds Response::Error. Pin that the reload happy path
+    // After the rate-limit gate acquires (fresh ReloadGate from
+    // handle_connection_for_test always lets the first reload
+    // through), if handler.reload returns Err the dispatch builds
+    // Response::Error. Pin that the reload happy path
     // (gate.try_acquire returned true) still produces an Error
     // response when the handler itself fails.
     let (mut client, server) = spawn_err_server();
@@ -433,8 +435,8 @@ async fn reload_handler_err_routes_to_response_error_after_gate_acquire() {
 
 #[tokio::test]
 async fn version_handler_err_routes_to_response_error() {
-    // server.rs:323-326 — Version arm Err mapping. Same shape as the
-    // others; pinned for completeness across all four request kinds.
+    // Version arm Err mapping. Same shape as the others; pinned for
+    // completeness across all four request kinds.
     let (mut client, server) = spawn_err_server();
     let id = Uuid::new_v4();
     let req = Request::Version { id };
@@ -453,13 +455,13 @@ async fn version_handler_err_routes_to_response_error() {
 
 #[tokio::test]
 async fn cancel_mid_connection_terminates_codec_loop_promptly() {
-    // server.rs:223-226 — the codec read races cancel.cancelled()
-    // against framed.next() under a READ_TIMEOUT_SECS deadline. When
-    // cancel fires, the select! cancel arm wins and
-    // handle_connection returns Ok(()) immediately, even when no
-    // frame is in flight. Pin: the server task exits within 100ms
-    // wall-clock of the cancel firing, well below the multi-second
-    // READ_TIMEOUT_SECS that would otherwise govern the read.
+    // The codec read races cancel.cancelled() against framed.next()
+    // under a READ_TIMEOUT_SECS deadline. When cancel fires, the
+    // select! cancel arm wins and handle_connection returns Ok(())
+    // immediately, even when no frame is in flight. Pin: the server
+    // task exits within 100ms wall-clock of the cancel firing, well
+    // below the multi-second READ_TIMEOUT_SECS that would otherwise
+    // govern the read.
     let (server_stream, client_stream) = UnixStream::pair().expect("pair");
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();

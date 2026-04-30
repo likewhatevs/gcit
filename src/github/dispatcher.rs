@@ -393,6 +393,18 @@ pub async fn dispatch_with_retry(
     })
     .retry(backoff)
     .when(GithubErrorKind::is_transient)
+    // The adjust closure intentionally returns `Some(retry_after)`
+    // when the schedule's `dur` is `None` (i.e. backon has exhausted
+    // `max_attempts`) so a `RateLimited` response always honors the
+    // server's `Retry-After` window even after the configured retry
+    // budget would otherwise stop. This is deliberate: the server
+    // told us the exact instant quota reopens, and a strict budget
+    // cutoff would either thrash on 403/RateLimited or surface a
+    // spurious "exhausted retries" error against the operator.
+    // RateLimited is the ONLY kind whose `retry_after()` returns
+    // `Some` (see `GithubErrorKind::retry_after`), so other
+    // transient errors still respect `max_attempts` via backon's
+    // returned `None`.
     .adjust(|err: &GithubErrorKind, dur: Option<Duration>| {
         // RateLimited overrides the schedule with the reset
         // epoch — but never *below* backon's computed delay

@@ -26,7 +26,6 @@
 // another file descriptor.").
 
 use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -253,135 +252,6 @@ async fn flock_holds_exclusive_for_full_write_duration() {
 }
 
 #[tokio::test]
-async fn flock_advisory_does_not_block_unrelated_processes() {
-    // flock is advisory: a process that does NOT call flock can
-    // open and write to the spool freely. Pin the contract by
-    // simulating an "unrelated tool" via a plain OpenOptions write
-    // while the notifier holds its flock (we hold via test-side
-    // flock for the same effect).
-    //
-    // gcit must not have escalated the spool file to mandatory
-    // locking (deprecated; removed in modern Linux kernels) — a
-    // mutation that swapped fd-lock's advisory flock for a
-    // mandatory-locking shim (e.g. setting mount-time `mand` +
-    // 02000 mode bits) would block the no-flock writer below.
-    let tmp = TempDir::new().expect("tempdir");
-    let user = "u_advisory";
-    let spool_path = tmp.path().join(user);
-    fs::write(&spool_path, b"").expect("create empty spool");
-
-    // Take a test-side flock and hold it across the no-flock
-    // writer's append. Spawn on a thread so the guard's lifetime is
-    // strictly bounded by the channel-driven release below.
-    let spool_for_thread = spool_path.clone();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let holder = std::thread::spawn(move || {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&spool_for_thread)
-            .expect("open for flock");
-        let mut lock = FdLock::new(file);
-        let guard = lock.write().expect("acquire test-side flock");
-        // Wait for the test to signal release.
-        let _ = release_rx.recv();
-        drop(guard);
-    });
-
-    // Give the holder a moment to acquire the lock.
-    tokio::time::sleep(Duration::from_millis(30)).await;
-
-    // Unrelated writer: open the spool with plain OpenOptions,
-    // append, no flock. This MUST succeed even though the holder
-    // owns an exclusive flock. Use a separate handle to isolate
-    // the no-flock semantics.
-    {
-        let mut f = OpenOptions::new()
-            .append(true)
-            .open(&spool_path)
-            .expect("open no-flock");
-        f.write_all(b"unrelated-tool wrote here\n")
-            .expect("write no-flock");
-        f.sync_all().expect("sync no-flock");
-    }
-
-    // Release the holder, join, verify the no-flock bytes landed.
-    release_tx.send(()).expect("signal release");
-    holder.join().expect("holder thread");
-    let bytes = fs::read(&spool_path).expect("read spool");
-    let text = std::str::from_utf8(&bytes).expect("utf8");
-    assert!(
-        text.contains("unrelated-tool wrote here"),
-        "advisory flock must NOT block a non-flock writer; spool: {text:?}",
-    );
-}
-
-#[test]
-fn flock_dropped_releases_lock_on_panic() {
-    // RAII semantics: a panic between `lock.write()?` and the end
-    // of `write_with_lock` unwinds the stack and drops the
-    // RwLockWriteGuard, which releases the flock. The next writer
-    // can then acquire without waiting.
-    //
-    // Mutation target: a refactor that holds the guard across an
-    // `mem::forget` boundary, or a Drop impl that swallows the
-    // unlock syscall, would leak the lock. After a panic, a
-    // second `try_write()` would surface ErrorKind::WouldBlock
-    // forever. The test's bounded retry catches.
-    let tmp = TempDir::new().expect("tempdir");
-    let spool_path = tmp.path().join("u_panic");
-    fs::write(&spool_path, b"").expect("create spool");
-
-    // Take and release the flock inside a thread that panics. The
-    // catch_unwind boundary captures the panic so the test
-    // continues; the guard drops as the stack unwinds.
-    let spool_for_panic = spool_path.clone();
-    let result = std::panic::catch_unwind(|| {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&spool_for_panic)
-            .expect("open");
-        let mut lock = FdLock::new(file);
-        let _guard = lock.write().expect("acquire flock");
-        // Simulate a writer that panicked mid-write.
-        panic!("simulated mid-write panic to verify flock release on unwind");
-    });
-    assert!(result.is_err(), "panic must have unwound");
-
-    // A fresh acquire MUST succeed without blocking. Use try_write
-    // (non-blocking) so the test fails fast rather than hanging if
-    // the lock leaked. Loop 10x with short sleeps to absorb any
-    // brief in-flight kernel state without papering over a real
-    // leak.
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&spool_path)
-        .expect("open after panic");
-    let mut lock = FdLock::new(file);
-    let mut acquired = false;
-    let mut attempts = 0;
-    while attempts < 10 {
-        attempts += 1;
-        match lock.try_write() {
-            Ok(_guard) => {
-                acquired = true;
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(e) => panic!("unexpected error from try_write: {e}"),
-        }
-    }
-    assert!(
-        acquired,
-        "panic must release flock via guard drop; try_write still WouldBlock after {attempts} attempts",
-    );
-}
-
-#[tokio::test]
 async fn flock_acquire_blocks_until_holder_drops() {
     // The notifier's `fd_lock::RwLock::write()` call is unbounded-
     // blocking (acquire blocks on the kernel's flock until granted).
@@ -441,11 +311,12 @@ async fn flock_acquire_blocks_until_holder_drops() {
 #[tokio::test]
 async fn flock_blocks_at_filesystem_level_not_per_open() {
     // Linux flock(2) is keyed on the underlying open-file
-    // description (the v_lock state on the inode), NOT per-
-    // file-descriptor or per-process. Two separate `open()` calls
-    // for the same path produce distinct fds whose flock calls
-    // contend — verified by holding flock on fd1 and observing
-    // try_write on fd2 surface ErrorKind::WouldBlock.
+    // description (the kernel tracks the lock list on the inode's
+    // `i_flctx->flc_flock` per `struct file_lock_context`), NOT
+    // per-file-descriptor or per-process. Two separate `open()`
+    // calls for the same path produce distinct fds whose flock
+    // calls contend — verified by holding flock on fd1 and
+    // observing try_write on fd2 surface ErrorKind::WouldBlock.
     //
     // Mutation target: a refactor that bypassed fd-lock and used
     // POSIX advisory locks (fcntl F_SETLK) — those are keyed

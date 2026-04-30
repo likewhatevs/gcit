@@ -73,8 +73,8 @@ fn summary(c: Conclusion) -> RunSummary {
         completed_at: Some(Utc::now()),
         // Use 0 jobs so the test focuses on the color field — the
         // collapsed/expanded branch difference doesn't affect color
-        // (color is set unconditionally before the field-build branch
-        // at src/discord/embed.rs:84-87).
+        // (build_run_complete_embed sets color unconditionally before
+        // the field-build branch).
         jobs: Vec::new(),
     }
 }
@@ -101,7 +101,7 @@ fn color_set_at_embed_color_field() {
     // produces an Embed whose `color` field is populated with the
     // value `color_for` returns for that conclusion.
     //
-    // Per twilight-model/src/channel/message/embed/mod.rs, `Embed.color`
+    // Per twilight-model::channel::message::embed::Embed, `Embed.color`
     // is `Option<u32>`; `None` means "use Discord's default sidebar
     // gray", which gcit explicitly avoids by always assigning Some(_).
     //

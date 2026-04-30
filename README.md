@@ -60,9 +60,9 @@ flow cannot crash the daemon or affect other flows.
   `{{run.*}}`, `{{gcit.*}}`. No control flow, no helpers, no partials.
 - **Credential safety**: secrets wrapped in `secrecy::SecretString`, redacted
   in `Debug`/`Display` and in `gcit status` / `gcit trigger --dry-run`
-  output. Credential files must have no group or other access bits set
-  (mode `0600` recommended; `0400`, `0500`, `0700` also accepted) and
-  be owned by the daemon's effective uid (or root, so operators on
+  output. Credential files must satisfy `mode & 0o077 == 0` (no group
+  or other access bits set; e.g. `0400`, `0600`, `0700`) and be owned
+  by the daemon's effective uid (or root, so operators on
   `DynamicUser=yes` units can drop credentials via `sudo`).
 
 ## Status
@@ -76,7 +76,7 @@ config schema are subject to change before 1.0.
 - systemd. `--foreground` mode is intended for development and testing; the
   supported deployment surface is the systemd units installed by `gcit
   install`.
-- Rust 1.85 or newer to build from source.
+- Rust 1.91 or newer to build from source.
 
 ## Install
 
@@ -221,19 +221,18 @@ Credentials are looked up in this order:
 1. `$CREDENTIALS_DIRECTORY/<credential_id>` (systemd `LoadCredential=`).
 2. `GCIT_CREDENTIAL_<UPPER_SNAKE_ID>` env var (e.g.
    `GCIT_CREDENTIAL_DISCORD_CI_WEBHOOK`).
-3. `<config_dir>/credentials/<credential_id>` file. Mode `0600` is
-   recommended; gcit accepts any mode whose group and other bits are
-   all clear (e.g. `0400`, `0500`, `0600`, `0700`). Owned by the
-   daemon's effective uid or root.
+3. `<config_dir>/credentials/<credential_id>` file. Mode must satisfy
+   `mode & 0o077 == 0` (no group or other access bits; e.g. `0400`,
+   `0600`, `0700`). Owned by the daemon's effective uid or root.
 4. Otherwise: error listing every searched path and the flows that need it.
 
 `LoadCredential=` is the recommended ingress under systemd. Credential file
-mode and owner are checked at every load; gcit refuses to read a file whose
-group or other read/write/execute bits are set (mode `0600` is the
-recommended canonical form, but any mode with no group/other bits — e.g.
-`0400`, `0500`, `0600`, `0700` — is accepted), or whose owner uid is
-neither the daemon's effective uid nor root (root is accepted so an
-operator on a `DynamicUser=yes` unit can drop credential files via
+mode and owner are checked at every load; gcit refuses to read a file
+whose group or other read/write/execute bits are set. The rule is `mode
+& 0o077 == 0`; examples include `0400`, `0600`, and `0700` (`0600` is
+the recommended canonical form). gcit also refuses any file whose owner
+uid is neither the daemon's effective uid nor root (root is accepted so
+an operator on a `DynamicUser=yes` unit can drop credential files via
 `sudo` — the transient daemon uid is not knowable in advance).
 
 GitHub authentication accepts only fine-grained personal access tokens (tokens

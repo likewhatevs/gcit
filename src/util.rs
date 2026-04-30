@@ -96,6 +96,7 @@ pub fn ensure_crypto_provider() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn atomic_write_creates_file_with_mode() {
@@ -162,6 +163,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn atomic_write_uses_current_dir_when_dest_has_no_parent() {
         // When `dest` is a bare filename (no parent path component),
         // `Path::parent` returns Some("") which the helper coerces
@@ -171,13 +173,15 @@ mod tests {
         //
         // We don't actually want to write in CWD during tests, so
         // pin the equivalent: tempdir as CWD, then a bare filename.
+        //
+        // `#[serial]` is mandatory: this test mutates the process-wide
+        // CWD via `set_current_dir`, which races every other test that
+        // resolves a relative path (or reads CWD). Without
+        // serialization a parallel test could observe the tempdir CWD
+        // and write its own outputs into a directory that's about to
+        // be removed, producing flakes.
         let td = tempfile::tempdir().unwrap();
         let prev = std::env::current_dir().expect("cwd");
-        // SAFETY: tests run in single-threaded blocks per
-        // serial_test elsewhere; this test changes CWD briefly and
-        // restores it. The risk of races is low for a self-contained
-        // test that does not interact with env vars or other CWD
-        // consumers.
         std::env::set_current_dir(td.path()).expect("chdir");
         let result = atomic_write(Path::new("bare.txt"), b"x", 0o600);
         let restored = std::env::set_current_dir(&prev);

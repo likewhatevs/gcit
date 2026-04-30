@@ -358,10 +358,10 @@ async fn append_does_not_truncate_existing_content() {
 
 #[test]
 fn append_with_path_traversal_in_user_rejected_at_config_load() {
-    // Per src/config/validate.rs:1029-1045 the local_mail user
-    // charset is `[A-Za-z0-9_-]+`; path-traversal sequences (`/`,
-    // `..`, etc.) hit the charset gate at config load and surface
-    // as ConfigError::Validate on `destination.local_mail.user`.
+    // The local_mail user charset enforced by validate_local_mail
+    // is `[A-Za-z0-9_-]+`; path-traversal sequences (`/`, `..`,
+    // etc.) hit the charset gate at config load and surface as
+    // ConfigError::Validate on `destination.local_mail.user`.
     //
     // This pins the first line of defense: a malicious config
     // never produces a `LocalMailNotifier` whose `user` would

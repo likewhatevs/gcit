@@ -39,8 +39,7 @@ use gcit::mail::mbox::{format_message, sanitize_header};
 // Form feed (0x0C): replaced.
 #[case::ff("Hello\x0cWorld", "Hello World")]
 // DEL (0x7F): NOT replaced — sanitize_header strips bytes < 0x20
-// only. 0x7F survives by design (matches the production behaviour
-// at src/mail/mbox.rs:79 which gates on `b < 0x20`).
+// only. 0x7F survives by design (sanitize_header gates on `b < 0x20`).
 #[case::del_kept("Hello\x7fWorld", "Hello\x7fWorld")]
 // Literal space at 0x20: kept.
 #[case::literal_space("Hello World", "Hello World")]
@@ -66,7 +65,7 @@ use gcit::mail::mbox::{format_message, sanitize_header};
 // Whitespace-only: preserved.
 #[case::ws_only("   ", "   ")]
 // Long string: no truncation by sanitizer (truncation is a separate
-// concern in the body cap at src/mail/mbox.rs::BODY_BYTE_CAP).
+// concern in the body cap mail::mbox::BODY_BYTE_CAP).
 #[case::long_no_truncate(
     "01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
     "01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
@@ -168,7 +167,7 @@ proptest! {
         // either maps to itself (>= 0x20) or to a single 0x20
         // (< 0x20 and != 0x20). The 1-to-1 property gives the
         // operator a predictable byte budget when combined with
-        // the BODY_BYTE_CAP check in src/mail/mbox.rs.
+        // the BODY_BYTE_CAP check in mail::mbox.
         //
         // Mutation target: using `.trim()` (1-to-zero
         // for leading/trailing whitespace) or escapes control

@@ -267,12 +267,11 @@ async fn http_422_unrelated_message_classified_as_unknown() {
     // 422 messages that do NOT mention "unexpected inputs" or
     // "gcit_run_id" — e.g. "Reference does not exist" or
     // "Workflow has been disabled" — must NOT classify as
-    // DispatchInvalid. The DispatchInvalid arm at
-    // src/github/error.rs::classify_status only fires when
-    // `message_indicates_dispatch_invalid` matches; everything else
-    // falls through to Unknown carrying the raw API message so
-    // operators see what GitHub actually rejected (rather than the
-    // misleading gcit_run_id YAML guidance).
+    // DispatchInvalid. The DispatchInvalid arm in classify_status
+    // only fires when `message_indicates_dispatch_invalid` matches;
+    // everything else falls through to Unknown carrying the raw API
+    // message so operators see what GitHub actually rejected (rather
+    // than the misleading gcit_run_id YAML guidance).
     //
     // Mutation target: broadening the DispatchInvalid
     // arm to fire on every 422 — operators chasing a "ref does not
@@ -376,11 +375,10 @@ async fn http_5xx_classified_as_server_error(#[case] status: u16) {
 #[tokio::test]
 async fn request_timeout_classified_as_timeout() {
     // wiremock holds the response longer than `request_timeout`. The
-    // dispatcher wraps `_post` in `tokio::time::timeout` (per
-    // src/github/dispatcher.rs:273); on Elapsed it surfaces the
-    // configured deadline through `timeout_error`. The Display string
-    // pins "Will retry" so operators see the daemon will recover on
-    // the next backon attempt.
+    // dispatcher wraps `_post` in `tokio::time::timeout`; on Elapsed
+    // it surfaces the configured deadline through `timeout_error`.
+    // The Display string pins "Will retry" so operators see the
+    // daemon will recover on the next backon attempt.
     //
     // The wiremock delay (3s) exceeds the configured 1s timeout. The
     // 5s request_timeout in `build_dispatch_deps` is the standing
@@ -428,7 +426,7 @@ async fn request_timeout_classified_as_timeout() {
 #[test]
 fn classifier_dispatches_transient_for_5xx_timeout_rate_limited() {
     // The retry-policy mapping (table documented at the top of
-    // src/github/error.rs):
+    // github::error):
     //   ServerError      -> Transient (backon decides retry_after)
     //   Timeout          -> Transient
     //   RateLimited      -> Transient (caller awaits reset)
@@ -567,7 +565,7 @@ fn classifier_handles_unknown_variants_safely() {
     // `classify` MUST handle every one without panicking AND produce a
     // Transient classification so backon retries — if the unknown
     // error persists, it surfaces in `gcit status` last_error. The
-    // routing in `src/github/error.rs::classify`:
+    // routing in github::error::classify:
     //   Hyper / Service / Encoder / Http -> Transport (Transient)
     //   anything else                    -> Unknown   (Transient)
     //

@@ -73,10 +73,10 @@ fire_on = ["run_complete"]
 ## 3. Drop credentials
 
 Each `credential_id` referenced in the config needs a credential file at
-`<config_dir>/credentials/<credential_id>`. Mode `0600` is recommended;
-gcit accepts any mode whose group and other bits are all clear (e.g.
-`0400`, `0500`, `0600`, `0700`). The file must be owned by the daemon's
-effective uid or by root.
+`<config_dir>/credentials/<credential_id>`. The mode must satisfy
+`mode & 0o077 == 0` (no group or other access bits; e.g. `0400`,
+`0600`, `0700`). The file must be owned by the daemon's effective uid
+or by root.
 
 ```sh
 sudo install -m 0600 -o root -g root /path/to/token /etc/gcit/credentials/github_pat

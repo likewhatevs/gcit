@@ -134,11 +134,12 @@ fn render_text(data: &serde_json::Value) {
                 }
             }
             // The daemon writes JSON `null` for `last_error` when no
-            // error is recorded (supervisor.rs render_one). Match
-            // explicitly on Object so a Null value does not produce
-            // a "?" placeholder line. `retry_at` is JSON `null` for
-            // every error kind except `GithubErrorKind::RateLimited`;
-            // hide the indented "retry_at" line when absent.
+            // error is recorded (flow/supervisor/control.rs's
+            // render_one). Match explicitly on Object so a Null value
+            // does not produce a "?" placeholder line. `retry_at` is
+            // JSON `null` for every error kind except
+            // `GithubErrorKind::RateLimited`; hide the indented
+            // "retry_at" line when absent.
             if let Some(serde_json::Value::Object(err)) = value.get("last_error") {
                 let at = err.get("at").and_then(|v| v.as_str()).unwrap_or("?");
                 let kind = err.get("kind").and_then(|v| v.as_str()).unwrap_or("?");

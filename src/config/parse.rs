@@ -29,8 +29,7 @@ use super::credential::CredentialId;
 /// All durations are typed `Duration`; all credential ids are typed
 /// `CredentialId`. Fields are pub for integration-test reachability
 /// (Rust's `pub(crate)` does not span the integration-test boundary);
-/// treat as crate-internal and unstable. `Serialize` is derived for
-/// `insta` snapshot tests.
+/// treat as crate-internal and unstable.
 #[derive(Debug, Clone, Serialize)]
 pub struct Config {
     pub source_path: PathBuf,
@@ -120,11 +119,10 @@ pub enum ActionConfig {
     GithubWorkflowDispatch {
         repo: String,
         workflow: String,
-        // Match the input TOML's `ref` key on the Serialize side too —
-        // insta snapshots over a typed Config must round-trip back to
-        // the same key the operator wrote, not the Rust-side
-        // `ref_name` (which exists only because `ref` is a Rust
-        // keyword).
+        // Match the input TOML's `ref` key on the Serialize side
+        // too so any round-trip serializer renders the operator-
+        // written key, not the Rust-side `ref_name` (which exists
+        // only because `ref` is a Rust keyword).
         #[serde(rename = "ref")]
         ref_name: String,
         credential_id: CredentialId,

@@ -1522,19 +1522,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn respawn_request_struct_carries_attempts_for_drain_retry_bounding() {
-        // The RespawnRequest type is the unit of work crossing the
-        // panic-watcher → supervisor select! → handle_respawn_request
-        // boundary. Pin its shape so a regression that drops `attempts`
-        // (which would silently uncap the drain-defer retry loop) is
-        // caught.
-        let req = RespawnRequest {
-            flow: "f".to_string(),
-            attempts: 7,
-        };
-        assert_eq!(req.flow, "f");
-        assert_eq!(req.attempts, 7);
-    }
-
 }

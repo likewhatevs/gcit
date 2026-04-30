@@ -402,24 +402,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_twilight_error_for_response_status_unauth() {
-        // Build an Error::Response with status=401 by relying on
-        // twilight's typed kind. We can't easily construct a
-        // twilight_http::Error directly, but we can verify the
-        // classifier predicate paths via a status-only switch.
-        // Pure-logic test: replicate the classifier branch.
-        for code in [401_u16, 403, 404, 410] {
-            let err_kind_label = match code {
-                401 | 403 | 404 | 410 => "permanent",
-                429 => "transient_rate_limit",
-                500..=599 => "transient_server",
-                _ => "permanent_other",
-            };
-            assert_eq!(err_kind_label, "permanent");
-        }
-    }
-
-    #[test]
     fn default_rate_limit_retry_after_is_5s() {
         assert_eq!(DEFAULT_RATE_LIMIT_RETRY_AFTER, Duration::from_secs(5));
     }
@@ -566,38 +548,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn classify_twilight_error_status_code_logic_covers_5xx_branch() {
-        // Replicates the 500-599 transient_server arm at notifier.rs:
-        // 218-226. Pure-logic mirror because constructing a
-        // twilight_http::Error::Response is awkward; the integration
-        // test in tests/discord_execute_webhook.rs drives the wire
-        // path. This test pins the predicate that the 5xx arm fires
-        // for every 5xx code.
-        for code in [500u16, 502, 503, 504, 599] {
-            let label = match code {
-                401 | 403 | 404 | 410 => "permanent",
-                429 => "transient_rate_limit",
-                500..=599 => "transient_server",
-                _ => "permanent_other",
-            };
-            assert_eq!(label, "transient_server", "code {code}");
-        }
-    }
-
-    #[test]
-    fn classify_twilight_error_status_code_logic_covers_other_4xx_branch() {
-        // The "other 4xx" Permanent fallback arm at notifier.rs:
-        // 230-232 fires for any 4xx not enumerated above (e.g.
-        // 400, 422). Pin the predicate.
-        for code in [400u16, 402, 405, 422, 451] {
-            let label = match code {
-                401 | 403 | 404 | 410 => "permanent",
-                429 => "transient_rate_limit",
-                500..=599 => "transient_server",
-                _ => "permanent_other",
-            };
-            assert_eq!(label, "permanent_other", "code {code}");
-        }
-    }
 }
