@@ -323,28 +323,17 @@ async fn multiple_requests_on_one_connection_each_dispatched() {
 struct ErrHandler;
 
 impl Handler for ErrHandler {
-    fn trigger(
-        &self,
-        _flow: &str,
-        _dry_run: bool,
-    ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send {
-        async move { Err("trigger handler failure".to_string()) }
+    async fn trigger(&self, _flow: &str, _dry_run: bool) -> Result<serde_json::Value, String> {
+        Err("trigger handler failure".to_string())
     }
-    fn status(
-        &self,
-        _flow: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send {
-        async move { Err("status handler failure".to_string()) }
+    async fn status(&self, _flow: Option<&str>) -> Result<serde_json::Value, String> {
+        Err("status handler failure".to_string())
     }
-    fn reload(
-        &self,
-    ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send {
-        async move { Err("reload handler failure".to_string()) }
+    async fn reload(&self) -> Result<serde_json::Value, String> {
+        Err("reload handler failure".to_string())
     }
-    fn version(
-        &self,
-    ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send {
-        async move { Err("version handler failure".to_string()) }
+    async fn version(&self) -> Result<serde_json::Value, String> {
+        Err("version handler failure".to_string())
     }
 }
 

@@ -1358,9 +1358,7 @@ mod tests {
             cmd_tx,
             state_mirror,
             last_errors: Arc::clone(&last_errors),
-            flow_names: Arc::new(RwLock::new(
-                pre_seed_handles.iter().cloned().collect::<Vec<_>>(),
-            )),
+            flow_names: Arc::new(RwLock::new(pre_seed_handles.to_vec())),
         });
 
         let fixture = ReloadFixture {

@@ -1857,28 +1857,27 @@ mod tests {
             "on_run_start must fire exactly once via spawn_fan_out for the single notifier; got {count}",
         );
     }
-}
 
-// Helper extension trait: clone FlowDispatchParams for test parameter
-// rebuilding. FlowDispatchParams is not Clone (it carries Arcs but the
-// derive isn't there because some inner types lack Clone bounds).
-// Implemented locally as a copy-by-field for the dispatcher.rs unit
-// tests; not exposed as a public API.
-#[cfg(test)]
-impl FlowDispatchParams {
-    fn clone_for_test(&self) -> FlowDispatchParams {
-        FlowDispatchParams {
-            flow_name: self.flow_name.clone(),
-            flow_description: self.flow_description.clone(),
-            url: self.url.clone(),
-            ref_name: self.ref_name.clone(),
-            action: self.action.clone(),
-            destinations: self.destinations.clone(),
-            github_client: Arc::clone(&self.github_client),
-            rate_bucket: Arc::clone(&self.rate_bucket),
-            rate_limit: Arc::clone(&self.rate_limit),
-            job_interval: self.job_interval,
-            notifiers: self.notifiers.clone(),
+    // Helper extension trait: clone FlowDispatchParams for test parameter
+    // rebuilding. FlowDispatchParams is not Clone (it carries Arcs but the
+    // derive isn't there because some inner types lack Clone bounds).
+    // Implemented locally as a copy-by-field for the dispatcher.rs unit
+    // tests; not exposed as a public API.
+    impl FlowDispatchParams {
+        fn clone_for_test(&self) -> FlowDispatchParams {
+            FlowDispatchParams {
+                flow_name: self.flow_name.clone(),
+                flow_description: self.flow_description.clone(),
+                url: self.url.clone(),
+                ref_name: self.ref_name.clone(),
+                action: self.action.clone(),
+                destinations: self.destinations.clone(),
+                github_client: Arc::clone(&self.github_client),
+                rate_bucket: Arc::clone(&self.rate_bucket),
+                rate_limit: Arc::clone(&self.rate_limit),
+                job_interval: self.job_interval,
+                notifiers: self.notifiers.clone(),
+            }
         }
     }
 }

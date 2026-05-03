@@ -243,10 +243,12 @@ mod tests {
     /// pure logging — no state to assert on the call itself; the test
     /// pins that the function does not panic across every variant of
     /// the `(result, job_id)` matrix.
+    ///
     /// Branch matrix coverage:
     ///   - Ok(Sent), Some(j) | None
     ///   - Ok(Skipped), Some(j) | None
     ///   - Err, Some(j) | None
+    ///
     /// Six branches; without these tests three (job_id = None for each
     /// outcome variant) and three more (job_id = Some) all stay unhit.
     #[test]

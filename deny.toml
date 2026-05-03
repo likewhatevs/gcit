@@ -39,8 +39,28 @@ multiple-versions = "deny"
 wildcards = "deny"
 allow = []
 deny = []
-skip = []
-skip-tree = []
+# Transitive dep version splits that gcit cannot resolve: different
+# major consumers (octocrab, gix-transport, zbus, etc.) depend on
+# incompatible versions of these foundational crates.
+skip = [
+    { crate = "foldhash" },
+    { crate = "getrandom" },
+    { crate = "hashbrown" },
+    { crate = "linux-raw-sys" },
+    { crate = "r-efi" },
+    { crate = "redox_syscall" },
+    { crate = "reqwest" },
+    { crate = "rustix" },
+    { crate = "toml_datetime" },
+    { crate = "windows-sys" },
+    { crate = "winnow" },
+    { crate = "wit-bindgen" },
+]
+# vergen-gix 1.x depends on gix 0.71 which pulls in older versions of
+# every gix-* crate alongside our direct (latest) gix-* deps. These
+# duplicates are build-time only and cannot be eliminated until
+# vergen-gix releases a version against a newer gix.
+skip-tree = [{ crate = "vergen-gix@1", depth = 20 }]
 
 [sources]
 unknown-registry = "deny"
@@ -59,7 +79,9 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
     "GPL-2.0",
+    "GPL-2.0-only",
     "ISC",
     "MIT",
     "MPL-2.0",

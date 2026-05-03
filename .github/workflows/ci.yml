@@ -100,7 +100,7 @@ jobs:
         run: |
           BIN=target/x86_64-unknown-linux-musl/release/gcit
           file "$BIN"
-          file "$BIN" | grep -q "statically linked"
+          file "$BIN" | grep -qE "statically linked|static-pie linked"
 
   audit:
     # cargo audit + cargo deny check on every PR. The deny.toml file
@@ -131,6 +131,8 @@ jobs:
     # links break the build.
     name: mdbook build + test + linkcheck
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91
@@ -214,7 +216,7 @@ jobs:
           # when the unit fails to parse; that surfaces directly. Both
           # a missing summary line AND a score >= 3.0 also fail the job
           # (no `|| true` mask anywhere in the gate path).
-          systemd-analyze --user security --no-pager gcit.service > sd-analyze.txt
+          SYSTEMD_LOG_LEVEL=warning systemd-analyze --offline=true security --no-pager --root=/ "$UNIT" > sd-analyze.txt
           cat sd-analyze.txt
           python3 - sd-analyze.txt <<'PY'
           import re, sys

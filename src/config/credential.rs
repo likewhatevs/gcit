@@ -110,12 +110,12 @@ impl CredentialId {
         &self.0
     }
 
-    /// Map the id to its `GCIT_CREDENTIAL_*` env var name: uppercase
-    /// + s/-/_/ + `GCIT_CREDENTIAL_` prefix. Delegates to the free
-    /// `id_to_env` so the rule lives in one place — the error-display
-    /// path needs to compute the same env-var name from raw strings
-    /// (where no `CredentialId` exists) and must not drift from the
-    /// typed-id path.
+    /// Map the id to its `GCIT_CREDENTIAL_*` env var name: uppercase,
+    /// replace hyphens with underscores, prefix with `GCIT_CREDENTIAL_`.
+    /// Delegates to the free `id_to_env` so the rule lives in one
+    /// place — the error-display path needs to compute the same
+    /// env-var name from raw strings (where no `CredentialId` exists)
+    /// and must not drift from the typed-id path.
     pub fn to_env_var(&self) -> String {
         id_to_env(&self.0)
     }
