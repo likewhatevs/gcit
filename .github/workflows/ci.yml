@@ -1,24 +1,16 @@
 # gcit CI: per-PR merge-gate workflow.
 #
-# Every job contributes a coverage, audit, or build artefact to the
-# merge gate. Inline shell stays in the YAML rather than living in
-# separate scripts so the gate is auditable in one place.
+# All commands live in the justfile so they are runnable locally via
+# `just ci-*`. The YAML handles only checkout, toolchain, cache, and
+# tool installation; every `run:` step calls a justfile recipe.
 #
 # Job matrix:
-#   test       — fmt + clippy -D warnings + nextest run + llvm-cov 90% gate
-#   musl       — release build to x86_64-unknown-linux-musl, statically
-#                linked binary asserted via `file`
-#   audit      — cargo audit (advisories) + cargo deny check (advisories,
-#                bans, sources, licenses)
+#   test       — fmt + clippy + nextest + llvm-cov 90% gate
+#   musl       — release build to x86_64-unknown-linux-musl
+#   audit      — cargo audit + cargo deny check
 #   docs       — mdbook build + test + linkcheck
-#   sd-analyze — systemd-analyze security score on the install-emitted
-#                gcit.service unit (target GOOD, score < 3.0)
-#   mutants    — cargo mutants per-PR (--in-diff origin/main); badge
-#                JSON is published manually via `just scripts::publish-mutants`
-#
-# `cargo nextest run` is the canonical test runner; coverage is
-# collected via `cargo llvm-cov nextest` so the same nextest
-# invocation drives both gates.
+#   sd-analyze — systemd-analyze security (target SAFE, score < 1.0)
+#   mutants    — cargo mutants per-PR (--in-diff origin/main)
 
 name: ci
 
@@ -43,33 +35,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.91
+      - uses: dtolnay/rust-toolchain@1.91
         with:
           components: rustfmt, clippy, llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
-
-      - name: cargo clippy --workspace --all-targets -- -D warnings
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      # 90% line-coverage gate. The nextest profile-default is
-      # `default`; runner timeouts are bounded by the runner's own 6h
-      # cap so a flaky network test cannot stall CI indefinitely.
-      - name: cargo llvm-cov nextest (90% line coverage gate)
-        run: |
-          cargo llvm-cov nextest \
-            --workspace \
-            --lcov \
-            --output-path lcov.info \
-            --fail-under-lines 90
-
+      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@just
+      - name: just ci-fmt
+        run: just ci-fmt
+      - name: just ci-clippy
+        run: just ci-clippy
+      - name: just ci-coverage
+        run: just ci-coverage
       - name: Upload coverage to codecov
         uses: codecov/codecov-action@v4
         with:
@@ -79,9 +57,6 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   musl:
-    # Static-binary build via musl. `file` asserts the ELF is
-    # statically linked; a dynamic dependency creep would surface here
-    # as a "dynamically linked" string.
     name: release build (x86_64-unknown-linux-musl)
     runs-on: ubuntu-latest
     steps:
@@ -90,45 +65,26 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
-      - name: Ensure musl target is installed
-        run: rustup target add x86_64-unknown-linux-musl
+      - uses: taiki-e/install-action@just
       - name: Install musl-tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
-      - name: cargo build --release --target x86_64-unknown-linux-musl
-        run: cargo build --release --target x86_64-unknown-linux-musl
-      - name: Assert statically linked
-        run: |
-          BIN=target/x86_64-unknown-linux-musl/release/gcit
-          file "$BIN"
-          file "$BIN" | grep -qE "statically linked|static-pie linked"
+      - name: just ci-musl
+        run: just ci-musl
 
   audit:
-    # cargo audit + cargo deny check on every PR. The deny.toml file
-    # (advisories, bans, sources, licenses) lives at the repo root; a
-    # missing config surfaces as a hard error from cargo-deny, which
-    # is intentional — supply-chain rules are part of the merge gate,
-    # not optional metadata.
     name: cargo audit + cargo deny check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91
       - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
-
-      - name: cargo audit
-        run: cargo audit --deny warnings
-
-      - name: cargo deny check
-        run: cargo deny check advisories bans sources licenses
+      - uses: taiki-e/install-action@cargo-audit
+      - uses: taiki-e/install-action@cargo-deny
+      - uses: taiki-e/install-action@just
+      - name: just ci-audit
+        run: just ci-audit
 
   docs:
-    # mdbook build + test + linkcheck. The mdbook source tree at
-    # `book/` is the public documentation; broken code blocks or dead
-    # links break the build.
     name: mdbook build + test + linkcheck
     runs-on: ubuntu-latest
     permissions:
@@ -137,14 +93,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91
       - uses: Swatinem/rust-cache@v2
-      - name: Install mdbook
-        uses: taiki-e/install-action@mdbook
+      - uses: taiki-e/install-action@mdbook
+      - uses: taiki-e/install-action@just
       - name: Install mdbook-linkcheck2
         run: cargo install mdbook-linkcheck2 --locked
-      - name: mdbook build
-        run: mdbook build book
-      - name: mdbook test
-        run: mdbook test book
+      - name: just ci-docs
+        run: just ci-docs
       - name: Deploy mdbook to gh-pages
         if: github.ref == 'refs/heads/main' && hashFiles('book/src/SUMMARY.md') != ''
         uses: peaceiris/actions-gh-pages@v4
@@ -157,87 +111,19 @@ jobs:
           commit_message: "ci: refresh mdbook"
 
   sd-analyze:
-    # systemd-analyze security gcit.service: assert exposure score < 3.0.
-    # The unit is rendered by running `gcit install --user
-    # --non-interactive --force` under a tempdir-rooted XDG layout so
-    # the install writes its outputs without touching the runner's
-    # /etc tree. systemd-analyze security then parses the rendered
-    # service unit and emits a numeric "Overall exposure level".
     name: systemd-analyze security score
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@just
       - name: Install systemd
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends systemd
-      - name: cargo build (debug binary is enough for unit emission)
-        run: cargo build
-      - name: Render unit + run systemd-analyze security
-        run: |
-          set -euo pipefail
-          ROOT="$(mktemp -d)"
-          # Sandbox the install: XDG_CONFIG_HOME / XDG_STATE_HOME drive
-          # `install_paths(InstallScope::User, ...)` (src/systemd/unit.rs);
-          # HOME is referenced by `home_dir()` (src/cli/install.rs) and
-          # by gcit.rs's user-default-config resolver. Pinning all three
-          # under $ROOT keeps the install confined to the temp tree.
-          export HOME="$ROOT/home"
-          export XDG_CONFIG_HOME="$ROOT/config"
-          export XDG_STATE_HOME="$ROOT/state"
-          mkdir -p "$XDG_CONFIG_HOME/gcit"
-          # Minimal config: one flow with a github_workflow_dispatch
-          # action and no destinations. Sufficient to render a unit.
-          cat > "$XDG_CONFIG_HOME/gcit/config.toml" <<'TOML'
-          [[flow]]
-          name = "ci-smoke"
-          [flow.source]
-          url = "https://github.com/example/example.git"
-          ref = "refs/heads/main"
-          [flow.action]
-          kind = "github_workflow_dispatch"
-          repo = "example/example"
-          workflow = "ci.yml"
-          ref = "refs/heads/main"
-          credential_id = "github_pat"
-          TOML
-          # Render the unit. --user keeps writes under $XDG_CONFIG_HOME/
-          # systemd/user/gcit.service; --force overwrites if a previous
-          # run left files; --non-interactive skips the y/N prompt.
-          ./target/debug/gcit install --user --non-interactive --force
-          UNIT="$XDG_CONFIG_HOME/systemd/user/gcit.service"
-          test -f "$UNIT"
-          # Score gate. systemd-analyze prints
-          #   "→ Overall exposure level for gcit.service: X.Y EXPOSURE"
-          # on the summary line. Capture the full output to disk for
-          # the job log, then extract the numeric score with python
-          # (bash arithmetic is integer-only, and python3 is preinstalled
-          # on every GitHub-hosted runner). systemd-analyze exits non-zero
-          # when the unit fails to parse; that surfaces directly. Both
-          # a missing summary line AND a score >= 3.0 also fail the job
-          # (no `|| true` mask anywhere in the gate path).
-          SYSTEMD_LOG_LEVEL=warning systemd-analyze --offline=true security --no-pager --root=/ "$UNIT" > sd-analyze.txt
-          cat sd-analyze.txt
-          python3 - sd-analyze.txt <<'PY'
-          import re, sys
-          path = sys.argv[1]
-          text = open(path).read()
-          m = re.search(r'Overall exposure level[^0-9]*([0-9]+(?:\.[0-9]+)?)', text)
-          if not m:
-              print("::error::systemd-analyze did not emit an Overall exposure level score")
-              sys.exit(1)
-          score = float(m.group(1))
-          print(f"systemd-analyze score: {score}")
-          if score >= 3.0:
-              print(f"::error::systemd-analyze score {score} >= 3.0 threshold")
-              sys.exit(1)
-          print(f"score {score} is below the 3.0 threshold")
-          PY
+      - name: just ci-sd-analyze
+        run: just ci-sd-analyze
 
   mutants-pr:
-    # Per-PR cargo-mutants in --in-diff mode. Fails the gate if any
-    # mutant is missed. The shields.io
-    # badge JSON is published manually via `just scripts::publish-mutants`.
     name: cargo mutants (--in-diff origin/main)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -247,24 +133,11 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.91
       - uses: Swatinem/rust-cache@v2
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-      - name: Install cargo-mutants
-        uses: taiki-e/install-action@cargo-mutants
-      - name: cargo mutants --in-diff
-        run: |
-          set -euo pipefail
-          git diff origin/main -- . > pr.diff
-          cargo mutants --in-diff pr.diff --json --output mutants.out
-
-      # Always upload the cargo-mutants output directory as a PR
-      # artifact. cargo-mutants writes the JSON outcomes plus a
-      # human-readable `mutants.out/missed.txt`, the per-mutant diff
-      # tree, and (when --html is enabled in a future iteration) the
-      # HTML report. Uploading on `if: always()` so reviewers can
-      # inspect the artifact even when the score gate fails the job.
-      # `retention-days: 14` matches the GitHub default for branches;
-      # the artifact is per-PR and rotates out naturally.
+      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@cargo-mutants
+      - uses: taiki-e/install-action@just
+      - name: just ci-mutants
+        run: just ci-mutants
       - name: Upload cargo-mutants output
         if: always()
         uses: actions/upload-artifact@v4
@@ -273,27 +146,6 @@ jobs:
           path: mutants.out
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Compute score + gate on missed mutants
+      - name: just ci-mutants-gate
         if: always()
-        run: |
-          set -euo pipefail
-          if [ ! -f mutants.out/outcomes.json ]; then
-            echo "no outcomes; skipping score computation"
-            exit 0
-          fi
-          caught=$(jq -r '.caught'  mutants.out/outcomes.json)
-          missed=$(jq -r '.missed'  mutants.out/outcomes.json)
-          timeout=$(jq -r '.timeout' mutants.out/outcomes.json)
-          denom=$((caught + missed + timeout))
-          if [ "$denom" -eq 0 ]; then
-            score=100
-          else
-            score=$((caught * 100 / denom))
-          fi
-          echo "Mutants: caught=$caught missed=$missed timeout=$timeout score=${score}%"
-          # PR-mode: fail if any missed mutants.
-          if [ "$missed" -gt 0 ]; then
-            echo "::error::cargo-mutants: $missed missed mutant(s) — PR gate fails"
-            exit 1
-          fi
+        run: just ci-mutants-gate
