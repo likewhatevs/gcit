@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2e113649.js";
+            window.path_to_searchindex_js = "searchindex-3f2922b5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-a88da85e.js"></script>
@@ -322,6 +322,9 @@ scope.</p>
 <code>[new]</code> per entry) and refuses to write without explicit confirmation.
 It copies the config, emits <code>gcit.service</code> and <code>gcit.socket</code>, and prints
 the next-step systemd commands. Pass <code>--non-interactive</code> for CI.</p>
+<p>To preview the rendered systemd service unit without writing anything,
+pass <code>--dry-run</code>: <code>gcit install --system --dry-run --config /etc/gcit/config.toml</code>
+prints the unit text to stdout (suitable for piping to <code>systemd-analyze security</code> or diffing against an installed unit).</p>
 <p>For a user-scope install (no <code>local_mail</code> destinations):
 <code>gcit install --user --config path/to/config.toml</code>.</p>
 <p><code>gcit uninstall</code> reverses an install via the on-disk install manifest;
@@ -1095,7 +1098,7 @@ expect these canonical message shapes from the notifier path:</p>
 <tr><td><code>cancelled before lock acquired on &lt;path&gt;; the blocking task may still write if the lock becomes available before the deadline</code></td><td>Cancel fired during lock-wait; the OS thread is still blocked on <code>flock(LOCK_EX)</code>. A stray spool entry MAY appear post-cancel if the holder releases before the deadline elapses.</td><td>None — normal shutdown/reload artifact. Re-read the spool only if you suspect a duplicate run on retry.</td></tr>
 <tr><td><code>spool lock not acquired within 5s</code></td><td>Another writer held the flock past <code>LOCK_WAIT_DEADLINE</code>. backon will retry on the next supervisor cycle.</td><td>Investigate the other writer (mailx, procmail, another gcit instance) if contention persists.</td></tr>
 <tr><td><code>discord webhook &lt;id&gt; cancelled; delivery status unknown — the request may or may not have reached Discord</code></td><td>Cancel fired mid-HTTP. Delivery state is ambiguous.</td><td>None — normal shutdown/reload artifact.</td></tr>
-<tr><td>any <code>map_io_error</code> variant (e.g. <code>spool file &lt;path&gt; does not exist</code>, <code>permission denied writing to &lt;path&gt;</code>, <code>&lt;path&gt; is a symlink</code>, etc.)</td><td>Operator-actionable I/O failure surfaced through <code>NotifyError::Permanent</code>.</td><td>Follow the remediation embedded in the message (<code>useradd</code>/<code>touch</code>, <code>ReadWritePaths=</code>, resolve the symlink, etc.).</td></tr>
+<tr><td>any <code>map_io_error</code> variant (e.g. <code>spool file &lt;path&gt; does not exist</code>, <code>permission denied writing to &lt;path&gt;</code>, <code>&lt;path&gt; is a symlink</code>, etc.)</td><td>Operator-actionable I/O failure surfaced through <code>NotifyError::Permanent</code>.</td><td>Follow the remediation embedded in the message (<code>useradd</code>/<code>touch</code>, <code>BindPaths=</code>, resolve the symlink, etc.).</td></tr>
 </tbody>
 </table>
 </div>
@@ -1160,15 +1163,22 @@ them to completion, and posts notifications.</p>
 Without it, gcit initializes the journald layer and refuses to start when
 journald is unreachable (logs from a misconfigured daemon must NOT silently
 route to stderr that nothing reads).</p>
-<h3 id="gcit-install---user----system---non-interactive---force"><a class="header" href="#gcit-install---user----system---non-interactive---force"><code>gcit install --user | --system [--non-interactive] [--force]</code></a></h3>
+<h3 id="gcit-install---user----system---non-interactive---force---dry-run"><a class="header" href="#gcit-install---user----system---non-interactive---force---dry-run"><code>gcit install --user | --system [--non-interactive] [--force] [--dry-run]</code></a></h3>
 <p>Interactive install of config skeleton + systemd units.</p>
 <ul>
 <li>One of <code>--user</code> or <code>--system</code> is required (clap <code>ArgGroup</code> mutex).</li>
 <li><code>--non-interactive</code> skips the path-preview confirmation prompt for CI.</li>
 <li><code>--force</code> overwrites existing managed files. Without it, encountering
 any existing managed file is fatal (<code>EX_CONFIG=78</code>).</li>
+<li><code>--dry-run</code> renders the systemd service unit to stdout and exits 0
+without writing files, creating users, or invoking daemon-reload.
+Config is still parsed and validated (so a bad config fails fast),
+and <code>--user</code> + <code>local_mail</code> is still rejected. Stdout contains only
+the unit text — the credential walkthrough, path preview, and
+post-install banner are suppressed so the output can be piped
+directly into <code>systemd-analyze security</code>.</li>
 </ul>
-<p>The wizard:</p>
+<p>The wizard (skipped under <code>--dry-run</code>):</p>
 <ol>
 <li>Walks each referenced credential id and prints the URL hint, target
 repo, install path, and <code>chmod 0600</code> command. Annotates already-
@@ -1393,14 +1403,14 @@ StateDirectory=gcit
 StateDirectoryMode=0700
 ConfigurationDirectory=gcit
 ConfigurationDirectoryMode=0750
-ReadWritePaths=/var/mail        # only when at least one local_mail destination is configured
+BindPaths=/var/mail        # only when at least one local_mail destination is configured
 Restart=on-failure
 NotifyAccess=main
 TimeoutStopSec=360
 </code></pre>
-<p><code>ReadWritePaths=/var/mail</code> is gated on <code>has_local_mail</code> (true when at
+<p><code>BindPaths=/var/mail</code> is gated on <code>has_local_mail</code> (true when at
 least one configured destination is <code>kind = "local_mail"</code>); a Discord-
-only install emits no <code>ReadWritePaths=/var/mail</code> line so
+only install emits no <code>BindPaths=/var/mail</code> line so
 <code>ProtectSystem=strict</code> is not unnecessarily relaxed for deployments
 that never write to <code>/var/mail</code>. Every other directive above is
 emitted byte-for-byte regardless of the user-model branch. The empty
@@ -1440,7 +1450,8 @@ LoadCredential=github_pat:/run/secrets/github_pat
 <code>LoadCredential</code> line; gcit’s resolution chain looks there first. See
 <a href="#resolution-order">Credential management</a>.</p>
 <h2 id="install-wizard-walkthrough"><a class="header" href="#install-wizard-walkthrough">Install wizard walkthrough</a></h2>
-<p><code>gcit install --system</code> (or <code>--user</code>) is interactive by default:</p>
+<p><code>gcit install --system</code> (or <code>--user</code>) is interactive by default
+(every step below is skipped under <code>--dry-run</code>):</p>
 <ol>
 <li><strong>Credential walkthrough.</strong> Prints one section per referenced
 credential id with the URL hint, target repo (for GitHub PATs), the
@@ -1471,6 +1482,22 @@ chosen scope and the <code>journalctl -u gcit -f</code> follow-up.</li>
 <p>The install refuses to silently overwrite any existing managed file
 without <code>--force</code> and lists every offending path so the operator can
 decide whether to <code>gcit uninstall</code> first or pass <code>--force</code>.</p>
+<p><code>gcit install --dry-run</code> short-circuits the wizard: config validation
+and <code>--user</code> + <code>local_mail</code> rejection still run, but the wizard then
+renders the systemd service unit to stdout and exits 0 without writing
+files, creating users, or invoking <code>daemon-reload</code>. The credential
+walkthrough, path preview, and post-install banner are suppressed so
+stdout contains only the unit text — pipe directly into
+<code>systemd-analyze security</code> to score the rendered unit, or diff the
+proposed unit against an existing one before running the real install:</p>
+<pre><code class="language-sh">gcit install --user --dry-run --config ~/.config/gcit/config.toml \
+  | diff - ~/.config/systemd/user/gcit.service
+</code></pre>
+<p><code>ExecStart=</code> records the absolute path of the gcit binary that
+rendered the unit (<code>std::env::current_exe()</code> at install time). When
+diffing a dry-run rendered from a development build against a unit
+installed from a different binary, expect the <code>ExecStart=</code>/<code>ExecReload=</code>
+paths to differ.</p>
 <h2 id="shutdown-semantics"><a class="header" href="#shutdown-semantics">Shutdown semantics</a></h2>
 <p>On <code>SIGTERM</code> (or <code>SIGINT</code>) the supervisor cancels its root token, awaits
 every per-flow poll/dispatcher/monitor task in the JoinSet, drains the

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2e113649.js";
+            window.path_to_searchindex_js = "searchindex-3f2922b5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-a88da85e.js"></script>
@@ -270,14 +270,14 @@ StateDirectory=gcit
 StateDirectoryMode=0700
 ConfigurationDirectory=gcit
 ConfigurationDirectoryMode=0750
-ReadWritePaths=/var/mail        # only when at least one local_mail destination is configured
+BindPaths=/var/mail        # only when at least one local_mail destination is configured
 Restart=on-failure
 NotifyAccess=main
 TimeoutStopSec=360
 </code></pre>
-<p><code>ReadWritePaths=/var/mail</code> is gated on <code>has_local_mail</code> (true when at
+<p><code>BindPaths=/var/mail</code> is gated on <code>has_local_mail</code> (true when at
 least one configured destination is <code>kind = "local_mail"</code>); a Discord-
-only install emits no <code>ReadWritePaths=/var/mail</code> line so
+only install emits no <code>BindPaths=/var/mail</code> line so
 <code>ProtectSystem=strict</code> is not unnecessarily relaxed for deployments
 that never write to <code>/var/mail</code>. Every other directive above is
 emitted byte-for-byte regardless of the user-model branch. The empty
@@ -317,7 +317,8 @@ LoadCredential=github_pat:/run/secrets/github_pat
 <code>LoadCredential</code> line; gcit’s resolution chain looks there first. See
 <a href="./credentials.html#resolution-order">Credential management</a>.</p>
 <h2 id="install-wizard-walkthrough"><a class="header" href="#install-wizard-walkthrough">Install wizard walkthrough</a></h2>
-<p><code>gcit install --system</code> (or <code>--user</code>) is interactive by default:</p>
+<p><code>gcit install --system</code> (or <code>--user</code>) is interactive by default
+(every step below is skipped under <code>--dry-run</code>):</p>
 <ol>
 <li><strong>Credential walkthrough.</strong> Prints one section per referenced
 credential id with the URL hint, target repo (for GitHub PATs), the
@@ -348,6 +349,22 @@ chosen scope and the <code>journalctl -u gcit -f</code> follow-up.</li>
 <p>The install refuses to silently overwrite any existing managed file
 without <code>--force</code> and lists every offending path so the operator can
 decide whether to <code>gcit uninstall</code> first or pass <code>--force</code>.</p>
+<p><code>gcit install --dry-run</code> short-circuits the wizard: config validation
+and <code>--user</code> + <code>local_mail</code> rejection still run, but the wizard then
+renders the systemd service unit to stdout and exits 0 without writing
+files, creating users, or invoking <code>daemon-reload</code>. The credential
+walkthrough, path preview, and post-install banner are suppressed so
+stdout contains only the unit text — pipe directly into
+<code>systemd-analyze security</code> to score the rendered unit, or diff the
+proposed unit against an existing one before running the real install:</p>
+<pre><code class="language-sh">gcit install --user --dry-run --config ~/.config/gcit/config.toml \
+  | diff - ~/.config/systemd/user/gcit.service
+</code></pre>
+<p><code>ExecStart=</code> records the absolute path of the gcit binary that
+rendered the unit (<code>std::env::current_exe()</code> at install time). When
+diffing a dry-run rendered from a development build against a unit
+installed from a different binary, expect the <code>ExecStart=</code>/<code>ExecReload=</code>
+paths to differ.</p>
 <h2 id="shutdown-semantics"><a class="header" href="#shutdown-semantics">Shutdown semantics</a></h2>
 <p>On <code>SIGTERM</code> (or <code>SIGINT</code>) the supervisor cancels its root token, awaits
 every per-flow poll/dispatcher/monitor task in the JoinSet, drains the

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2e113649.js";
+            window.path_to_searchindex_js = "searchindex-3f2922b5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-a88da85e.js"></script>
@@ -368,7 +368,7 @@ expect these canonical message shapes from the notifier path:</p>
 <tr><td><code>cancelled before lock acquired on &lt;path&gt;; the blocking task may still write if the lock becomes available before the deadline</code></td><td>Cancel fired during lock-wait; the OS thread is still blocked on <code>flock(LOCK_EX)</code>. A stray spool entry MAY appear post-cancel if the holder releases before the deadline elapses.</td><td>None — normal shutdown/reload artifact. Re-read the spool only if you suspect a duplicate run on retry.</td></tr>
 <tr><td><code>spool lock not acquired within 5s</code></td><td>Another writer held the flock past <code>LOCK_WAIT_DEADLINE</code>. backon will retry on the next supervisor cycle.</td><td>Investigate the other writer (mailx, procmail, another gcit instance) if contention persists.</td></tr>
 <tr><td><code>discord webhook &lt;id&gt; cancelled; delivery status unknown — the request may or may not have reached Discord</code></td><td>Cancel fired mid-HTTP. Delivery state is ambiguous.</td><td>None — normal shutdown/reload artifact.</td></tr>
-<tr><td>any <code>map_io_error</code> variant (e.g. <code>spool file &lt;path&gt; does not exist</code>, <code>permission denied writing to &lt;path&gt;</code>, <code>&lt;path&gt; is a symlink</code>, etc.)</td><td>Operator-actionable I/O failure surfaced through <code>NotifyError::Permanent</code>.</td><td>Follow the remediation embedded in the message (<code>useradd</code>/<code>touch</code>, <code>ReadWritePaths=</code>, resolve the symlink, etc.).</td></tr>
+<tr><td>any <code>map_io_error</code> variant (e.g. <code>spool file &lt;path&gt; does not exist</code>, <code>permission denied writing to &lt;path&gt;</code>, <code>&lt;path&gt; is a symlink</code>, etc.)</td><td>Operator-actionable I/O failure surfaced through <code>NotifyError::Permanent</code>.</td><td>Follow the remediation embedded in the message (<code>useradd</code>/<code>touch</code>, <code>BindPaths=</code>, resolve the symlink, etc.).</td></tr>
 </tbody>
 </table>
 </div>

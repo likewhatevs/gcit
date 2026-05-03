@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2e113649.js";
+            window.path_to_searchindex_js = "searchindex-3f2922b5.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-a88da85e.js"></script>
@@ -268,6 +268,9 @@ scope.</p>
 <code>[new]</code> per entry) and refuses to write without explicit confirmation.
 It copies the config, emits <code>gcit.service</code> and <code>gcit.socket</code>, and prints
 the next-step systemd commands. Pass <code>--non-interactive</code> for CI.</p>
+<p>To preview the rendered systemd service unit without writing anything,
+pass <code>--dry-run</code>: <code>gcit install --system --dry-run --config /etc/gcit/config.toml</code>
+prints the unit text to stdout (suitable for piping to <code>systemd-analyze security</code> or diffing against an installed unit).</p>
 <p>For a user-scope install (no <code>local_mail</code> destinations):
 <code>gcit install --user --config path/to/config.toml</code>.</p>
 <p><code>gcit uninstall</code> reverses an install via the on-disk install manifest;
