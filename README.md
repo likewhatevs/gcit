@@ -187,7 +187,7 @@ journalctl -u gcit -f
 | subcommand | purpose |
 |---|---|
 | `gcit run [--foreground]` | daemon entry; routed via the systemd unit |
-| `gcit install {--user\|--system}` | interactive install of config skeleton + systemd units |
+| `gcit install {--user\|--system} [--dry-run]` | interactive install of config skeleton + systemd units; `--dry-run` renders the service unit to stdout without writing files |
 | `gcit uninstall {--user\|--system}` | reverse a prior install via the install manifest |
 | `gcit check [--config PATH]` | validate config; print every error in one pass |
 | `gcit status [FLOW] [--format text\|json]` | per-flow status snapshot via the control socket |

@@ -1,4 +1,4 @@
-// `gcit install` — guided 5-step setup wizard.
+// `gcit install` — guided 5-step setup wizard (`--dry-run` short-circuits to render-only).
 //
 // Steps:
 //   1. Credential walkthrough (per credential_id).
@@ -8,6 +8,13 @@
 //   4. Write files atomically + write the install manifest at
 //      $STATE_DIRECTORY/.install-manifest.json.
 //   5. Print post-install systemctl commands.
+//
+// `--dry-run` short-circuits after config validation: renders the
+// systemd service unit to stdout and exits 0. No credential
+// walkthrough, no path preview, no file writes, no useradd, no
+// daemon-reload, no post-install banner — stdout contains only the
+// unit text so it can be piped directly into
+// `systemd-analyze security`.
 //
 // Conventions:
 //   - Manifest schema:
@@ -101,7 +108,10 @@ pub struct ManifestEntry {
 /// `interactive = true` prompts for confirmation; `false` skips the
 /// prompt (CI use). `force = true` overwrites existing files; without
 /// it, encountering any file in `paths` already on disk is fatal
-/// (EX_CONFIG=78).
+/// (EX_CONFIG=78). `dry_run = true` short-circuits after config
+/// validation and `current_exe()` resolution: the rendered systemd
+/// service unit is printed to stdout and run exits 0 without resolving
+/// `$HOME`, writing files, creating users, or invoking daemon-reload.
 ///
 /// Async because `trigger_daemon_reload` talks to the user session bus
 /// via zbus. Callers run inside the binary's tokio runtime.
@@ -110,6 +120,7 @@ pub async fn run(
     scope: InstallScope,
     interactive: bool,
     force: bool,
+    dry_run: bool,
 ) -> ExitCode {
     // Parse + validate config first. If the config doesn't load, we
     // cannot guide the user through the rest of the wizard.
@@ -127,6 +138,8 @@ pub async fn run(
     // system-managed static user; the per-user systemd manager cannot
     // useradd or join the `mail` group. Surfacing this at install time
     // prevents a silently-broken --user install for local_mail flows.
+    // Applies to dry-run too: the rendered unit reflects what install
+    // would write, and that combination is not installable.
     let has_local_mail = cfg.flow.iter().any(|f| {
         f.destination
             .iter()
@@ -141,15 +154,6 @@ pub async fn run(
         );
         return ExitCode::from(exit::USAGE);
     }
-
-    let home = match home_dir() {
-        Some(h) => h,
-        None => {
-            eprintln!("gcit install: cannot resolve $HOME");
-            return ExitCode::from(exit::USAGE);
-        }
-    };
-    let paths = install_paths(scope, &home);
 
     // Resolve the install-time gcit binary so the rendered systemd
     // unit's ExecStart and ExecReload point at THIS binary, not at a
@@ -169,6 +173,36 @@ pub async fn run(
             return ExitCode::from(exit::OSERR);
         }
     };
+
+    // --dry-run short-circuit: render the service unit and print to
+    // stdout. Nothing else — no credential walkthrough, no path
+    // preview, no manifest, no daemon-reload — so callers can pipe
+    // stdout directly into `systemd-analyze security`. Preceding
+    // validation (config load, --user+local_mail rejection,
+    // current_exe) still runs so a bad config / environment fails
+    // fast before anything is rendered. home_dir / install_paths are
+    // deliberately NOT resolved here — dry-run does not write to disk
+    // so it must not require $HOME to be set.
+    if dry_run {
+        let unit = render_service_unit(&cfg, scope, &binary_path);
+        // print! (not println!): render_service_unit's output already
+        // ends with `WantedBy=default.target\n` (see systemd::unit at
+        // the bottom of render_service_unit). println! would append a
+        // second \n and produce a stray blank line that systemd-analyze
+        // tolerates but that complicates byte-exact diffs against an
+        // installed unit.
+        print!("{}", unit);
+        return ExitCode::from(exit::OK);
+    }
+
+    let home = match home_dir() {
+        Some(h) => h,
+        None => {
+            eprintln!("gcit install: cannot resolve $HOME");
+            return ExitCode::from(exit::USAGE);
+        }
+    };
+    let paths = install_paths(scope, &home);
 
     // Step 1: credential walkthrough.
     print_credential_walkthrough(&cfg, &paths, scope);

@@ -149,7 +149,8 @@ systemd populates `$CREDENTIALS_DIRECTORY` with one file per
 
 ## Install wizard walkthrough
 
-`gcit install --system` (or `--user`) is interactive by default:
+`gcit install --system` (or `--user`) is interactive by default
+(every step below is skipped under `--dry-run`):
 
 1. **Credential walkthrough.** Prints one section per referenced
    credential id with the URL hint, target repo (for GitHub PATs), the
@@ -181,6 +182,16 @@ systemd populates `$CREDENTIALS_DIRECTORY` with one file per
 The install refuses to silently overwrite any existing managed file
 without `--force` and lists every offending path so the operator can
 decide whether to `gcit uninstall` first or pass `--force`.
+
+`gcit install --dry-run` short-circuits the wizard: config validation
+and `--user` + `local_mail` rejection still run, but the wizard then
+renders the systemd service unit to stdout and exits 0 without writing
+files, creating users, or invoking `daemon-reload`. The credential
+walkthrough, path preview, and post-install banner are suppressed so
+stdout contains only the unit text — pipe directly into
+`systemd-analyze security` to score the rendered unit, or redirect to
+a file to diff the proposed unit against an existing one before
+running the real install.
 
 ## Shutdown semantics
 

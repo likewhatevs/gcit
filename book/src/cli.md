@@ -41,7 +41,7 @@ Without it, gcit initializes the journald layer and refuses to start when
 journald is unreachable (logs from a misconfigured daemon must NOT silently
 route to stderr that nothing reads).
 
-### `gcit install --user | --system [--non-interactive] [--force]`
+### `gcit install --user | --system [--non-interactive] [--force] [--dry-run]`
 
 Interactive install of config skeleton + systemd units.
 
@@ -49,8 +49,15 @@ Interactive install of config skeleton + systemd units.
 - `--non-interactive` skips the path-preview confirmation prompt for CI.
 - `--force` overwrites existing managed files. Without it, encountering
   any existing managed file is fatal (`EX_CONFIG=78`).
+- `--dry-run` renders the systemd service unit to stdout and exits 0
+  without writing files, creating users, or invoking daemon-reload.
+  Config is still parsed and validated (so a bad config fails fast),
+  and `--user` + `local_mail` is still rejected. Stdout contains only
+  the unit text — the credential walkthrough, path preview, and
+  post-install banner are suppressed so the output can be piped
+  directly into `systemd-analyze security`.
 
-The wizard:
+The wizard (skipped under `--dry-run`):
 
 1. Walks each referenced credential id and prints the URL hint, target
    repo, install path, and `chmod 0600` command. Annotates already-

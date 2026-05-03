@@ -70,18 +70,14 @@ ci-docs:
     mdbook build book
     mdbook test book
 
-# Render systemd unit via `gcit install`, score it with systemd-analyze (SAFE < 1.0)
+# Render systemd unit via `gcit install --dry-run`, score it with systemd-analyze (SAFE < 1.0)
 ci-sd-analyze: build
     #!/usr/bin/env bash
     set -euo pipefail
-    ROOT="$(mktemp -d)"
-    export HOME="$ROOT/home" XDG_CONFIG_HOME="$ROOT/config" XDG_STATE_HOME="$ROOT/state"
-    mkdir -p "$XDG_CONFIG_HOME/gcit"
-    cp tests/resources/config/minimal.toml "$XDG_CONFIG_HOME/gcit/config.toml"
-    ./target/debug/gcit install --user --non-interactive --force
-    UNIT="$XDG_CONFIG_HOME/systemd/user/gcit.service"
-    SYSTEMD_LOG_LEVEL=warning systemd-analyze --offline=true security --no-pager --root=/ "$UNIT" | tee sd-analyze.txt
-    just scripts::sd-analyze-score sd-analyze.txt
+    mkdir -p target/sd-analyze
+    ./target/debug/gcit install --user --dry-run --config tests/resources/config/minimal.toml > target/sd-analyze/unit.service
+    SYSTEMD_LOG_LEVEL=warning systemd-analyze --offline=true security --no-pager --root=/ target/sd-analyze/unit.service | tee target/sd-analyze/sd-analyze.txt
+    just scripts::sd-analyze-score target/sd-analyze/sd-analyze.txt
 
 # Per-PR mutation testing (--in-diff)
 ci-mutants:

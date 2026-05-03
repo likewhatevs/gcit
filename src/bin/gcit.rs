@@ -97,7 +97,9 @@ enum Cmd {
     Check,
     /// Install gcit's systemd units, config, and manifest. `--user`
     /// or `--system` is required. Refuses silent overwrite without
-    /// `--force`.
+    /// `--force`. With `--dry-run`, renders the systemd service unit
+    /// to stdout without writing files, creating users, or invoking
+    /// daemon-reload.
     Install(InstallArgs),
     /// Reverse a prior `gcit install` using the install manifest.
     /// `--user` or `--system` is required.
@@ -142,6 +144,10 @@ struct InstallArgs {
     /// Install system-wide (writes under /etc/systemd/system + /etc/gcit).
     #[arg(long)]
     system: bool,
+    /// Render the systemd service unit to stdout without writing files,
+    /// creating users, or running daemon-reload.
+    #[arg(long)]
+    dry_run: bool,
     /// Skip the path-preview confirmation prompt (CI use).
     #[arg(long)]
     non_interactive: bool,
@@ -407,7 +413,7 @@ async fn async_main(listen_fds: Vec<(RawFd, String)>) -> ExitCode {
                 return code;
             }
             let scope = pick_scope(a.user, a.system);
-            cli::install::run(&config_path, scope, !a.non_interactive, a.force).await
+            cli::install::run(&config_path, scope, !a.non_interactive, a.force, a.dry_run).await
         }
         Some(Cmd::Uninstall(a)) => {
             if let Err(code) = init_log(true) {

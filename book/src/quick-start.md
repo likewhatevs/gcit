@@ -108,6 +108,11 @@ The install command previews every file path it will create (`[exists]` /
 It copies the config, emits `gcit.service` and `gcit.socket`, and prints
 the next-step systemd commands. Pass `--non-interactive` for CI.
 
+To preview the rendered systemd service unit without writing anything,
+pass `--dry-run`: `gcit install --system --dry-run --config /etc/gcit/config.toml`
+prints the unit text to stdout (suitable for piping to `systemd-analyze
+security` or diffing against an installed unit).
+
 For a user-scope install (no `local_mail` destinations):
 `gcit install --user --config path/to/config.toml`.
 

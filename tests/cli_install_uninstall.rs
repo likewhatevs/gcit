@@ -92,7 +92,7 @@ fn isolated_command(home: &Path) -> Command {
 }
 
 #[test]
-fn install_help_prints_user_system_non_interactive_force_flags() {
+fn install_help_prints_every_install_flag() {
     // The clap-derived help output must surface every flag the
     // operator can pass to `gcit install`. A refactor that drops a
     // flag's `#[arg(long)]` would be caught here.
@@ -105,7 +105,8 @@ fn install_help_prints_user_system_non_interactive_force_flags() {
         .stdout(predicate::str::contains("--user"))
         .stdout(predicate::str::contains("--system"))
         .stdout(predicate::str::contains("--non-interactive"))
-        .stdout(predicate::str::contains("--force"));
+        .stdout(predicate::str::contains("--force"))
+        .stdout(predicate::str::contains("--dry-run"));
 }
 
 #[test]
@@ -1247,4 +1248,194 @@ fn install_user_with_source_credential_id_completes_and_walkthrough_includes_id(
     assert!(paths.socket_unit.exists());
     assert!(paths.config.exists());
     assert!(paths.manifest.exists());
+}
+
+// ---------------------------------------------------------------------
+// install --dry-run: short-circuits after config + scope validation,
+// renders the systemd service unit to stdout, exits 0, writes nothing.
+// Distinct from the normal install path (which writes files, prints a
+// credential walkthrough + path preview, and may invoke daemon-reload).
+// Pins: stdout shape (only unit text), exit code, zero side effects on
+// disk, and that pre-dry-run validation gates still fire.
+// ---------------------------------------------------------------------
+
+#[test]
+fn install_user_dry_run_prints_only_service_unit_text_and_exits_zero() {
+    // Drives `gcit install --user --dry-run` against a Discord-only
+    // minimal config. cli::install::run renders the service unit via
+    // render_service_unit() and prints it to stdout, then exits OK.
+    // No credential walkthrough, no path preview, no prompt, no
+    // daemon-reload, no post-install banner — stdout is the unit text
+    // only, suitable for piping to `systemd-analyze security`.
+    let td = TempDir::new().unwrap();
+    let cfg = write_minimal_config(td.path());
+    let output = isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .output()
+        .expect("install --dry-run must run");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // First line is the [Unit] header from render_service_unit().
+    assert!(
+        stdout.starts_with("[Unit]\n"),
+        "stdout must start with `[Unit]\\n`; got: {stdout}",
+    );
+    // Last non-empty content from render_service_unit() ends with a
+    // trailing newline after WantedBy=default.target.
+    assert!(
+        stdout.ends_with("WantedBy=default.target\n"),
+        "stdout must end with `WantedBy=default.target\\n`; got tail: {:?}",
+        &stdout.as_bytes()[stdout.len().saturating_sub(40)..],
+    );
+    // None of the install-side print markers leak into the dry-run
+    // pipe. Each marker corresponds to a distinct print site
+    // (credential walkthrough, path preview, prompt, post-install
+    // banner) that must be skipped by the early-exit branch.
+    for marker in [
+        "# Credentials",
+        "# Files gcit will write",
+        "# Next steps",
+        "Proceed?",
+        "install cancelled",
+        "Wrote ",
+        "daemon-reload",
+    ] {
+        assert!(
+            !stdout.contains(marker),
+            "dry-run stdout must not contain `{marker}`; got: {stdout}",
+        );
+    }
+    // Discord-only config emits DynamicUser=yes (not the static
+    // User=gcit / Group=mail pair). Pin so a regression that broke
+    // the user-model branch surfaces here as well.
+    assert!(
+        stdout.contains("DynamicUser=yes"),
+        "Discord-only dry-run must emit DynamicUser=yes; got: {stdout}",
+    );
+    assert!(
+        !stdout.contains("User=gcit"),
+        "Discord-only dry-run must NOT emit User=gcit; got: {stdout}",
+    );
+}
+
+#[test]
+fn install_user_dry_run_writes_no_files() {
+    // Dry-run must not write any of the managed paths the normal
+    // install path writes: gcit.service, gcit.socket, the config copy,
+    // or the install manifest. Anchored to the same path-resolution
+    // helper used by the success-path tests so a regression that
+    // produced silent writes surfaces.
+    let td = TempDir::new().unwrap();
+    let cfg = write_minimal_config(td.path());
+    let paths = user_scope_paths(td.path());
+    isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+    assert!(!paths.service_unit.exists());
+    assert!(!paths.socket_unit.exists());
+    assert!(!paths.config.exists());
+    assert!(!paths.manifest.exists());
+}
+
+#[test]
+fn install_user_dry_run_with_local_mail_still_rejected_with_usage_64() {
+    // The --user + local_mail rejection runs BEFORE the dry-run
+    // early-exit. Letting dry-run emit the rendered unit for that
+    // combination would print `User=gcit / Group=mail` for a scope
+    // that cannot grant the mail group — broken on its face. The
+    // rejection therefore stays in dry-run too.
+    let td = TempDir::new().unwrap();
+    let cfg = write_local_mail_config(td.path());
+    isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .assert()
+        .code(64)
+        .stderr(predicate::str::contains("/var/mail"))
+        .stderr(predicate::str::contains("--system"));
+}
+
+#[test]
+fn install_user_dry_run_with_malformed_config_exits_config_78() {
+    // config::load failure runs BEFORE the dry-run early-exit. A bad
+    // config still maps to EX_CONFIG=78 in dry-run; we don't want a
+    // CI pipeline to render a unit from a config that no real install
+    // would accept.
+    let td = TempDir::new().unwrap();
+    let bad_config = td.path().join("malformed.toml");
+    std::fs::write(&bad_config, "this is = not valid = toml = at all\n").unwrap();
+    isolated_command(td.path())
+        .arg("--config")
+        .arg(&bad_config)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .assert()
+        .code(78);
+}
+
+#[test]
+fn install_user_dry_run_emits_user_scope_load_credential_paths() {
+    // The LoadCredential lines reflect the chosen scope: user-scope
+    // installs source credentials from `%E/gcit/credentials/<id>` (the
+    // systemd specifier for $XDG_CONFIG_HOME). Pinned so a regression
+    // that flipped the scope-driven path back to /etc/gcit/credentials
+    // (the system-scope value) surfaces here.
+    let td = TempDir::new().unwrap();
+    let cfg = write_minimal_config(td.path());
+    let output = isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .output()
+        .expect("install --dry-run must run");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Minimal config references credential ids `github_pat` and
+    // `discord_webhook`; both surface as LoadCredential= lines under
+    // `%E/gcit/credentials/` for user scope.
+    assert!(
+        stdout.contains("LoadCredential=github_pat:%E/gcit/credentials/github_pat"),
+        "user-scope dry-run must surface user-scope LoadCredential path; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("LoadCredential=discord_webhook:%E/gcit/credentials/discord_webhook"),
+        "user-scope dry-run must surface user-scope LoadCredential path; got: {stdout}",
+    );
+    // Sibling check: the system-scope path must NOT appear in a
+    // user-scope dry-run, otherwise the operator would see a unit
+    // that points at a directory their session cannot read.
+    assert!(
+        !stdout.contains("/etc/gcit/credentials/"),
+        "user-scope dry-run must not surface the system-scope credentials path; got: {stdout}",
+    );
+}
+
+#[test]
+fn install_dry_run_help_text_present() {
+    // The clap-derived help output for `gcit install` must surface
+    // the `--dry-run` flag with its first-line description so an
+    // operator can discover the feature without reading source.
+    Command::cargo_bin("gcit")
+        .unwrap()
+        .arg("install")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--dry-run"))
+        .stdout(predicate::str::contains("Render the systemd service unit"));
 }

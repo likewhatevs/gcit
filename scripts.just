@@ -30,8 +30,13 @@ sd-analyze-score file:
     //! regex = "1"
     //! ```
     fn main() {
-        let path = std::env::args().nth(1).expect("usage: sd-analyze-score <file>");
-        let text = std::fs::read_to_string(&path)
+        // The `file` recipe parameter is interpolated via just's
+        // `{{file}}` substitution before the script runs. just's
+        // `[script(...)]` recipes do NOT pass parameters to the
+        // script via std::env::args() or environment variables — the
+        // template substitution is the only delivery mechanism.
+        let path = "{{file}}";
+        let text = std::fs::read_to_string(path)
             .unwrap_or_else(|e| { eprintln!("cannot read {path}: {e}"); std::process::exit(1); });
         let re = regex::Regex::new(r"Overall exposure level[^0-9]*([0-9]+(?:\.[0-9]+)?)").unwrap();
         let score: f64 = match re.captures(&text) {
