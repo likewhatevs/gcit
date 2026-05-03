@@ -193,11 +193,7 @@ mod tests {
             _ctx: &'a crate::notify::RunContext,
             _cancel: &'a tokio_util::sync::CancellationToken,
         ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>>
-                    + Send
-                    + 'a,
-            >,
+            Box<dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>> + Send + 'a>,
         > {
             Box::pin(async {
                 Ok(NotifyOutcome::Skipped {
@@ -211,11 +207,7 @@ mod tests {
             _job: &'a crate::github::JobResult,
             _cancel: &'a tokio_util::sync::CancellationToken,
         ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>>
-                    + Send
-                    + 'a,
-            >,
+            Box<dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>> + Send + 'a>,
         > {
             Box::pin(async {
                 Ok(NotifyOutcome::Skipped {
@@ -229,11 +221,7 @@ mod tests {
             _summary: &'a crate::github::RunSummary,
             _cancel: &'a tokio_util::sync::CancellationToken,
         ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>>
-                    + Send
-                    + 'a,
-            >,
+            Box<dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>> + Send + 'a>,
         > {
             Box::pin(async {
                 Ok(NotifyOutcome::Skipped {

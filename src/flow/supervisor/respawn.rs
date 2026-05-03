@@ -704,7 +704,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     #[traced_test]
-    async fn handle_flow_exit_panic_first_records_last_error_inserts_respawning_cancels_handle_and_enqueues_request() {
+    async fn handle_flow_exit_panic_first_records_last_error_inserts_respawning_cancels_handle_and_enqueues_request(
+    ) {
         // The PanicFirst arm of `handle_flow_exit` performs five
         // observable side effects that this test pins:
         //   1. record_last_error with kind="panic" and the panic message
@@ -803,7 +804,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     #[traced_test]
-    async fn handle_flow_exit_panic_duplicate_records_last_error_but_does_not_spawn_second_watcher() {
+    async fn handle_flow_exit_panic_duplicate_records_last_error_but_does_not_spawn_second_watcher()
+    {
         // PanicDuplicate arm of `handle_flow_exit`: respawning_flows
         // already contains the flow (set by the first panic via the
         // sibling role's PanicFirst). The second panic still records
@@ -883,7 +885,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     #[traced_test]
-    async fn handle_flow_exit_clean_exit_removes_handle_without_touching_respawning_or_last_error() {
+    async fn handle_flow_exit_clean_exit_removes_handle_without_touching_respawning_or_last_error()
+    {
         // CleanExit arm of `handle_flow_exit`: the inner future
         // returned cleanly (cancellation or natural completion). The
         // supervisor drops the FlowHandle entry but does NOT touch
@@ -1130,7 +1133,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
-    async fn handle_flow_exit_panic_first_with_no_handle_present_skips_cancel_but_still_inserts_respawning() {
+    async fn handle_flow_exit_panic_first_with_no_handle_present_skips_cancel_but_still_inserts_respawning(
+    ) {
         // The handle may already be gone when the panic lands (clean
         // exit of the sibling raced ahead, or the supervisor cancelled
         // the flow during reload and the cancel-driven exit's
@@ -1181,7 +1185,8 @@ mod tests {
     // -----------------------------------------------------------------
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
-    async fn handle_respawn_request_drain_defer_re_enqueues_with_attempts_incremented_when_pending_exits_outstanding() {
+    async fn handle_respawn_request_drain_defer_re_enqueues_with_attempts_incremented_when_pending_exits_outstanding(
+    ) {
         // The drain-defer path of `handle_respawn_request`:
         // pending_exits has an outstanding count for the flow AND
         // attempts < MAX_ATTEMPTS.
@@ -1200,8 +1205,7 @@ mod tests {
         let cfg = Arc::new(test_config(vec![test_flow_config("flow1", true)]));
         let (config_watch_tx, _config_watch_rx) = watch::channel(Arc::clone(&cfg));
         let config_watch_tx = Arc::new(config_watch_tx);
-        let control_handler =
-            test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
+        let control_handler = test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
         let (respawn_tx, mut respawn_rx) = mpsc::channel::<RespawnRequest>(4);
         let mut join_set: JoinSet<FlowExit> = JoinSet::new();
 
@@ -1227,11 +1231,7 @@ mod tests {
             "drain-defer must NOT release the respawning_flows slot",
         );
         // No spawn happened (join_set still empty).
-        assert_eq!(
-            join_set.len(),
-            0,
-            "drain-defer must NOT call spawn_flow",
-        );
+        assert_eq!(join_set.len(), 0, "drain-defer must NOT call spawn_flow",);
 
         // Advance past RESPAWN_RETRY_INTERVAL so the re-enqueue task
         // wakes and sends. Yield first so the re-enqueue task's sleep
@@ -1276,8 +1276,7 @@ mod tests {
         let cfg = Arc::new(test_config(vec![]));
         let (config_watch_tx, _config_watch_rx) = watch::channel(Arc::clone(&cfg));
         let config_watch_tx = Arc::new(config_watch_tx);
-        let control_handler =
-            test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
+        let control_handler = test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
         let (respawn_tx, mut respawn_rx) = mpsc::channel::<RespawnRequest>(4);
         let mut join_set: JoinSet<FlowExit> = JoinSet::new();
 
@@ -1334,8 +1333,7 @@ mod tests {
         let cfg = Arc::new(test_config(vec![test_flow_config("flow1", true)]));
         let (config_watch_tx, _config_watch_rx) = watch::channel(Arc::clone(&cfg));
         let config_watch_tx = Arc::new(config_watch_tx);
-        let control_handler =
-            test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
+        let control_handler = test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
         let (respawn_tx, _respawn_rx) = mpsc::channel::<RespawnRequest>(4);
         let mut join_set: JoinSet<FlowExit> = JoinSet::new();
 
@@ -1384,8 +1382,7 @@ mod tests {
         let cfg = Arc::new(test_config(vec![]));
         let (config_watch_tx, _config_watch_rx) = watch::channel(Arc::clone(&cfg));
         let config_watch_tx = Arc::new(config_watch_tx);
-        let control_handler =
-            test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
+        let control_handler = test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
         let (respawn_tx, _respawn_rx) = mpsc::channel::<RespawnRequest>(4);
         let mut join_set: JoinSet<FlowExit> = JoinSet::new();
 
@@ -1432,8 +1429,7 @@ mod tests {
         let cfg = Arc::new(test_config(vec![test_flow_config("flow1", false)]));
         let (config_watch_tx, _config_watch_rx) = watch::channel(Arc::clone(&cfg));
         let config_watch_tx = Arc::new(config_watch_tx);
-        let control_handler =
-            test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
+        let control_handler = test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
         let (respawn_tx, _respawn_rx) = mpsc::channel::<RespawnRequest>(4);
         let mut join_set: JoinSet<FlowExit> = JoinSet::new();
 
@@ -1482,8 +1478,7 @@ mod tests {
         let cfg = Arc::new(test_config(vec![]));
         let (config_watch_tx, _config_watch_rx) = watch::channel(Arc::clone(&cfg));
         let config_watch_tx = Arc::new(config_watch_tx);
-        let control_handler =
-            test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
+        let control_handler = test_control_handler(Arc::clone(&last_errors), state_mirror, vec![]);
         let (respawn_tx, mut respawn_rx) = mpsc::channel::<RespawnRequest>(4);
         let mut join_set: JoinSet<FlowExit> = JoinSet::new();
 
@@ -1521,5 +1516,4 @@ mod tests {
             "no-pending-exits path must NOT re-enqueue (drain-defer arm not taken)",
         );
     }
-
 }

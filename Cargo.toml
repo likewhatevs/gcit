@@ -31,13 +31,13 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "gzip", "stream"] }
 
-gix-url = "0.35"
-gix-transport = { version = "0.56", default-features = false, features = ["blocking-client", "http-client-reqwest", "http-client-reqwest-rust-tls"] }
-gix-protocol = { version = "0.60", default-features = false, features = ["blocking-client", "handshake"] }
-gix-features = "0.47"
-gix-credentials = "0.37"
-gix-hash = { version = "0.24", features = ["sha1"] }
-gix-refspec = "0.40"
+gix-url = "0.36"
+gix-transport = { version = "0.57", default-features = false, features = ["blocking-client", "http-client-reqwest", "http-client-reqwest-rust-tls"] }
+gix-protocol = { version = "0.61", default-features = false, features = ["blocking-client", "handshake"] }
+gix-features = "0.48"
+gix-credentials = "0.38"
+gix-hash = { version = "0.25", features = ["sha1"] }
+gix-refspec = "0.41"
 
 octocrab = "0.49"
 

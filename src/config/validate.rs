@@ -1985,7 +1985,9 @@ mod tests {
         // would silently break a strict-mode render pass — surfaceable
         // here as a top-level key absence.
         let ctx = probe_context();
-        let obj = ctx.as_object().expect("probe context must be a JSON object");
+        let obj = ctx
+            .as_object()
+            .expect("probe context must be a JSON object");
         for ns in TEMPLATE_NAMESPACES {
             assert!(
                 obj.contains_key(*ns),
@@ -2240,6 +2242,10 @@ mod tests {
             .and_then(|v| v.as_str())
             .expect("gcit.run_id must exist as a string");
         assert_eq!(v.len(), 36, "uuid string must be 36 chars; got: {v}");
-        assert_eq!(v.matches('-').count(), 4, "uuid must have 4 hyphens; got: {v}");
+        assert_eq!(
+            v.matches('-').count(),
+            4,
+            "uuid must have 4 hyphens; got: {v}"
+        );
     }
 }

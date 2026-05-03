@@ -98,7 +98,7 @@ Every strategy yields a `PollOutcome`. The supervisor pairs each
 | `Some(prev)` | `!= prev` | **yes** |
 
 `UnbornRef` and `Unchanged` never fire, but both still trigger a
-`PollObservation` so `gcit status` can report "polled <timestamp>" without
+`PollObservation` so `gcit status` can report "polled &lt;timestamp&gt;" without
 showing a stale "no activity" indicator.
 
 ## Cooldown

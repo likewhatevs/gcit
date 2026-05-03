@@ -693,8 +693,8 @@ mod tests {
         // The shutdown final-persist must have written the in-memory
         // state to disk. The flow from batch 1 — which would otherwise
         // have been lost when the writer thread exited — is recovered.
-        let raw = std::fs::read_to_string(&path)
-            .expect("file must exist after final-persist recovery");
+        let raw =
+            std::fs::read_to_string(&path).expect("file must exist after final-persist recovery");
         let s: State = serde_json::from_str(&raw).unwrap();
         assert!(
             s.flows.contains_key("flow-shutdown"),

@@ -380,18 +380,12 @@ async fn scan_runs_for_match(
 
         // Walk to the next page, if any.
         match current.next.clone() {
-            Some(uri) => match next_page(
-                client,
-                rate_limit,
-                &params.repo,
-                &params.workflow,
-                uri,
-            )
-            .await?
-            {
-                Some(p) => current = p,
-                None => break,
-            },
+            Some(uri) => {
+                match next_page(client, rate_limit, &params.repo, &params.workflow, uri).await? {
+                    Some(p) => current = p,
+                    None => break,
+                }
+            }
             None => break,
         }
     }
@@ -441,18 +435,12 @@ async fn scan_runs_for_fallback(
             break;
         }
         match current.next.clone() {
-            Some(uri) => match next_page(
-                client,
-                rate_limit,
-                &params.repo,
-                &params.workflow,
-                uri,
-            )
-            .await?
-            {
-                Some(p) => current = p,
-                None => break,
-            },
+            Some(uri) => {
+                match next_page(client, rate_limit, &params.repo, &params.workflow, uri).await? {
+                    Some(p) => current = p,
+                    None => break,
+                }
+            }
             None => break,
         }
     }

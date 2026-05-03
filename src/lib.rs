@@ -4,9 +4,7 @@
 // macOS, Windows, and other Unix variants are not supported and `lib.rs`
 // emits a `compile_error!` on non-Linux targets.
 #[cfg(not(target_os = "linux"))]
-compile_error!(
-    "gcit requires Linux + systemd. Other operating systems are not supported."
-);
+compile_error!("gcit requires Linux + systemd. Other operating systems are not supported.");
 
 // The library is not a published API surface; the only consumers are
 // the `gcit` binary and the integration test harness under `tests/`.

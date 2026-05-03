@@ -24,9 +24,7 @@ fn version_prints_crate_version_and_git_sha() {
         // `(VERGEN_IDEMPOTENT_OUTPUT)` for the placeholder. Either
         // proves bin/gcit.rs's `concat!(... " (", env!("VERGEN_GIT_SHA"), ")")`
         // composition produced a parenthesized SHA segment.
-        .stdout(
-            predicate::str::is_match(r"\(([0-9a-f]{7,}|VERGEN_IDEMPOTENT_OUTPUT)\)").unwrap(),
-        );
+        .stdout(predicate::str::is_match(r"\(([0-9a-f]{7,}|VERGEN_IDEMPOTENT_OUTPUT)\)").unwrap());
 }
 
 #[test]

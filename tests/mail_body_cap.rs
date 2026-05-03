@@ -524,4 +524,3 @@ impl std::io::Write for SharedBufferWriter {
         Ok(())
     }
 }
-

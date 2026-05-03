@@ -90,6 +90,8 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
+      - name: Ensure musl target is installed
+        run: rustup target add x86_64-unknown-linux-musl
       - name: Install musl-tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
       - name: cargo build --release --target x86_64-unknown-linux-musl
@@ -135,8 +137,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install mdbook
         uses: taiki-e/install-action@mdbook
-      - name: Install mdbook-linkcheck
-        run: cargo install mdbook-linkcheck --locked
+      - name: Install mdbook-linkcheck2
+        run: cargo install mdbook-linkcheck2 --locked
       - name: mdbook build
         run: mdbook build book
       - name: mdbook test
@@ -212,7 +214,7 @@ jobs:
           # when the unit fails to parse; that surfaces directly. Both
           # a missing summary line AND a score >= 3.0 also fail the job
           # (no `|| true` mask anywhere in the gate path).
-          systemd-analyze security --no-pager "$UNIT" > sd-analyze.txt
+          systemd-analyze --user security --no-pager gcit.service > sd-analyze.txt
           cat sd-analyze.txt
           python3 - sd-analyze.txt <<'PY'
           import re, sys

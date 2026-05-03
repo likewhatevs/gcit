@@ -287,18 +287,26 @@ async fn supervisor_run_with_factories_boots_and_shuts_down_cleanly() {
     // PollTaskFactory / DispatchTaskFactory type aliases exactly.
     let poll_factory: PollTaskFactory = {
         let invocations = Arc::clone(&poll_invocations);
-        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-            // Fresh ScriptedPollExecutor per spawn so the script's
-            // internal cycle counter resets after a respawn (which is
-            // what production code does too — RealPollExecutor::for_url
-            // is called fresh per spawn).
-            let executor = ScriptedPollExecutor::new(Arc::clone(&invocations), 0xaa);
-            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
-                ));
-            fut
-        })
+        Arc::new(
+            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
+                // Fresh ScriptedPollExecutor per spawn so the script's
+                // internal cycle counter resets after a respawn (which is
+                // what production code does too — RealPollExecutor::for_url
+                // is called fresh per spawn).
+                let executor = ScriptedPollExecutor::new(Arc::clone(&invocations), 0xaa);
+                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                    Box::pin(poll_run_with_executor(
+                        params,
+                        executor,
+                        last_sha,
+                        last_dispatched_at,
+                        state_tx,
+                        trigger_tx,
+                        cancel,
+                    ));
+                fut
+            },
+        )
     };
     let dispatch_factory: DispatchTaskFactory = {
         let invocations = Arc::clone(&dispatch_invocations);
@@ -517,10 +525,7 @@ async fn wait_for_control_socket(socket_path: &std::path::Path) {
 /// JSON object. Drives the live control listener bound by the daemon
 /// — proves the panic-respawn / reload paths are observable to the
 /// same wire-protocol surface operators see via `gcit status`.
-async fn fetch_status(
-    socket_path: &std::path::Path,
-    flow: Option<&str>,
-) -> serde_json::Value {
+async fn fetch_status(socket_path: &std::path::Path, flow: Option<&str>) -> serde_json::Value {
     let mut client = gcit::control::Client::connect(socket_path)
         .await
         .expect("connect to control socket");
@@ -654,37 +659,43 @@ async fn supervisor_respawns_panicked_flow_and_clears_last_error() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-            let call_n = factory_calls.fetch_add(1, Ordering::SeqCst);
-            if call_n == 0 {
-                // Gen-1: synthesize a future whose first poll panics.
-                // This bypasses `poll_run_with_executor` entirely so
-                // the panic fires as soon as tokio polls the spawned
-                // task — no need to advance through the
-                // `source_interval` (15s) sleep before reaching the
-                // executor. The catch_unwind wrapper in
-                // `flows::spawn_flow` converts the panic into
-                // `FlowExit { panic: Some(_) }` which the supervisor's
-                // `handle_flow_exit` classifies as `PanicFirst`.
-                Box::pin(async move {
-                    panic!("scripted-gen1-poll-panic");
-                })
-            } else {
-                // Gen-2+: clean ScriptedPollExecutor. The first
-                // successful poll cycle clears the stale "panic"
-                // last_error per the sticky-error fix in
-                // flow::poll::run_with_executor.
-                let executor = ScriptedPollExecutor::new(
-                    Arc::clone(&poll_cycle_invocations),
-                    0xbb,
-                );
-                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                    Box::pin(poll_run_with_executor(
-                        params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
-                    ));
-                fut
-            }
-        })
+        Arc::new(
+            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
+                let call_n = factory_calls.fetch_add(1, Ordering::SeqCst);
+                if call_n == 0 {
+                    // Gen-1: synthesize a future whose first poll panics.
+                    // This bypasses `poll_run_with_executor` entirely so
+                    // the panic fires as soon as tokio polls the spawned
+                    // task — no need to advance through the
+                    // `source_interval` (15s) sleep before reaching the
+                    // executor. The catch_unwind wrapper in
+                    // `flows::spawn_flow` converts the panic into
+                    // `FlowExit { panic: Some(_) }` which the supervisor's
+                    // `handle_flow_exit` classifies as `PanicFirst`.
+                    Box::pin(async move {
+                        panic!("scripted-gen1-poll-panic");
+                    })
+                } else {
+                    // Gen-2+: clean ScriptedPollExecutor. The first
+                    // successful poll cycle clears the stale "panic"
+                    // last_error per the sticky-error fix in
+                    // flow::poll::run_with_executor.
+                    let executor =
+                        ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xbb);
+                    let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                        Box::pin(poll_run_with_executor(
+                            params,
+                            executor,
+                            last_sha,
+                            last_dispatched_at,
+                            state_tx,
+                            trigger_tx,
+                            cancel,
+                        ));
+                    fut
+                }
+            },
+        )
     };
     let dispatch_factory: DispatchTaskFactory = {
         let invocations = Arc::clone(&dispatch_invocations);
@@ -863,18 +874,23 @@ async fn supervisor_sighup_reload_restarts_url_changed_flow() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-            factory_calls.fetch_add(1, Ordering::SeqCst);
-            let executor = ScriptedPollExecutor::new(
-                Arc::clone(&poll_cycle_invocations),
-                0xcc,
-            );
-            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
-                ));
-            fut
-        })
+        Arc::new(
+            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
+                factory_calls.fetch_add(1, Ordering::SeqCst);
+                let executor = ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xcc);
+                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                    Box::pin(poll_run_with_executor(
+                        params,
+                        executor,
+                        last_sha,
+                        last_dispatched_at,
+                        state_tx,
+                        trigger_tx,
+                        cancel,
+                    ));
+                fut
+            },
+        )
     };
     let dispatch_factory: DispatchTaskFactory = {
         let invocations = Arc::clone(&dispatch_invocations);
@@ -1117,16 +1133,23 @@ async fn supervisor_sighup_reload_adds_new_flow_via_spawn_arm() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-            factory_calls.fetch_add(1, Ordering::SeqCst);
-            let executor =
-                ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xdd);
-            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
-                ));
-            fut
-        })
+        Arc::new(
+            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
+                factory_calls.fetch_add(1, Ordering::SeqCst);
+                let executor = ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xdd);
+                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                    Box::pin(poll_run_with_executor(
+                        params,
+                        executor,
+                        last_sha,
+                        last_dispatched_at,
+                        state_tx,
+                        trigger_tx,
+                        cancel,
+                    ));
+                fut
+            },
+        )
     };
     let dispatch_factory: DispatchTaskFactory = {
         let invocations = Arc::clone(&dispatch_invocations);
@@ -1262,16 +1285,23 @@ async fn supervisor_sighup_reload_restarts_non_url_change_via_restart_arm() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-            factory_calls.fetch_add(1, Ordering::SeqCst);
-            let executor =
-                ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xee);
-            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
-                ));
-            fut
-        })
+        Arc::new(
+            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
+                factory_calls.fetch_add(1, Ordering::SeqCst);
+                let executor = ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xee);
+                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                    Box::pin(poll_run_with_executor(
+                        params,
+                        executor,
+                        last_sha,
+                        last_dispatched_at,
+                        state_tx,
+                        trigger_tx,
+                        cancel,
+                    ));
+                fut
+            },
+        )
     };
     let dispatch_factory: DispatchTaskFactory = {
         let invocations = Arc::clone(&dispatch_invocations);
@@ -1383,16 +1413,23 @@ async fn supervisor_control_command_trigger_dry_run_returns_rendered_payload() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-            factory_calls.fetch_add(1, Ordering::SeqCst);
-            let executor =
-                ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xff);
-            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
-                ));
-            fut
-        })
+        Arc::new(
+            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
+                factory_calls.fetch_add(1, Ordering::SeqCst);
+                let executor = ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xff);
+                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                    Box::pin(poll_run_with_executor(
+                        params,
+                        executor,
+                        last_sha,
+                        last_dispatched_at,
+                        state_tx,
+                        trigger_tx,
+                        cancel,
+                    ));
+                fut
+            },
+        )
     };
     let dispatch_factory: DispatchTaskFactory = {
         let invocations = Arc::clone(&dispatch_invocations);
@@ -1450,10 +1487,7 @@ async fn supervisor_control_command_trigger_dry_run_returns_rendered_payload() {
             panic!("trigger --dry-run must succeed; got Error: {message}")
         }
     };
-    assert_eq!(
-        resp_id, req_id,
-        "response id must echo the request id",
-    );
+    assert_eq!(resp_id, req_id, "response id must echo the request id",);
 
     // Pin every field render_dry_run_payload emits so a regression
     // that drops or renames any of them surfaces here.
@@ -1549,16 +1583,23 @@ async fn supervisor_sigint_routes_to_shutdown_branch() {
     let poll_factory: PollTaskFactory = {
         let factory_calls = Arc::clone(&factory_calls);
         let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-            factory_calls.fetch_add(1, Ordering::SeqCst);
-            let executor =
-                ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xa1);
-            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(poll_run_with_executor(
-                    params, executor, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel,
-                ));
-            fut
-        })
+        Arc::new(
+            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
+                factory_calls.fetch_add(1, Ordering::SeqCst);
+                let executor = ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xa1);
+                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                    Box::pin(poll_run_with_executor(
+                        params,
+                        executor,
+                        last_sha,
+                        last_dispatched_at,
+                        state_tx,
+                        trigger_tx,
+                        cancel,
+                    ));
+                fut
+            },
+        )
     };
     let dispatch_factory: DispatchTaskFactory = {
         let invocations = Arc::clone(&dispatch_invocations);
@@ -1681,8 +1722,7 @@ credential_id = "github_pat"
 #[serial_test::serial]
 async fn supervisor_run_with_factories_returns_daemon_error_config_on_duplicate_flow_names() {
     let fixture = setup_daemon_fixture();
-    let config_path =
-        write_config(fixture.config_dir.path(), TWO_FLOWS_DUPLICATE_NAME_CONFIG);
+    let config_path = write_config(fixture.config_dir.path(), TWO_FLOWS_DUPLICATE_NAME_CONFIG);
     let control_socket = fixture.runtime_dir.path().join("control.sock");
 
     // Factories panic if invoked. They MUST NOT be — the boot path
@@ -1714,9 +1754,7 @@ async fn supervisor_run_with_factories_returns_daemon_error_config_on_duplicate_
     // duplicate-name diagnoses (emitted by validate_flow_name).
     let errs = match err {
         gcit::flow::supervisor::DaemonError::Config(errs) => errs,
-        other => panic!(
-            "duplicate flow names must surface as DaemonError::Config; got: {other:?}"
-        ),
+        other => panic!("duplicate flow names must surface as DaemonError::Config; got: {other:?}"),
     };
     assert!(
         !errs.is_empty(),
@@ -1820,9 +1858,7 @@ async fn supervisor_run_with_factories_returns_daemon_error_state_lock_held_when
                 "LockHeld Display must name the contended lock path; got: {rendered}",
             );
         }
-        other => panic!(
-            "contended flock must surface as DaemonError::State; got: {other:?}"
-        ),
+        other => panic!("contended flock must surface as DaemonError::State; got: {other:?}"),
     }
 
     // Drop the held lock guard explicitly so the tempdir cleanup

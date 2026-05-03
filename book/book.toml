@@ -11,5 +11,5 @@ preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/likewhatevs/gcit"
 edit-url-template = "https://github.com/likewhatevs/gcit/edit/main/book/{path}"
 
-[output.linkcheck]
+[output.linkcheck2]
 warning-policy = "error"

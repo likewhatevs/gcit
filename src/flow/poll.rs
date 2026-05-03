@@ -330,11 +330,8 @@ pub async fn run_with_executor<E>(
                     // the trigger AND skip the PollObservation so the
                     // in-memory `last_sha` does not advance — the diff
                     // re-fires on the next poll past the window.
-                    let cooled_down = is_cooled_down(
-                        last_dispatched_at,
-                        now,
-                        params.effective_poll.cooldown,
-                    );
+                    let cooled_down =
+                        is_cooled_down(last_dispatched_at, now, params.effective_poll.cooldown);
                     if cooled_down {
                         // Compute the cooldown deadline so operators
                         // reading `gcit status` can see when the next
@@ -347,11 +344,10 @@ pub async fn run_with_executor<E>(
                         // cooldown ever takes; on the unreachable
                         // overflow path we fall back to leaving the
                         // deadline unset rather than crashing the loop.
-                        let cooldown_until = chrono::Duration::from_std(
-                            params.effective_poll.cooldown,
-                        )
-                        .ok()
-                        .map(|d| now + d);
+                        let cooldown_until =
+                            chrono::Duration::from_std(params.effective_poll.cooldown)
+                                .ok()
+                                .map(|d| now + d);
                         let observation = StateUpdate::PollObservation {
                             flow: params.flow_name.clone(),
                             last_sha: sha,
@@ -1668,7 +1664,9 @@ mod tests {
         // first real check after the gate.
         ensure_crypto_provider();
         let mut params = params_with_url("not a url at all");
-        params.octo = Some(Arc::new(octocrab::Octocrab::builder().build().expect("octocrab")));
+        params.octo = Some(Arc::new(
+            octocrab::Octocrab::builder().build().expect("octocrab"),
+        ));
         let cancel = CancellationToken::new();
         let mut fp: Option<String> = None;
         let err = poll_one(PollStrategy::GithubApi, &params, &mut fp, &cancel)
@@ -1743,7 +1741,9 @@ mod tests {
 
     fn unit_poll_params(
         flow_name: &str,
-        last_errors: Arc<tokio::sync::Mutex<BTreeMap<String, crate::flow::supervisor::FlowLastError>>>,
+        last_errors: Arc<
+            tokio::sync::Mutex<BTreeMap<String, crate::flow::supervisor::FlowLastError>>,
+        >,
     ) -> PollParams {
         PollParams {
             flow_name: flow_name.to_string(),
@@ -1852,7 +1852,9 @@ mod tests {
         let cancel = CancellationToken::new();
         let params = unit_poll_params("failed-flow", Arc::clone(&last_errors));
         let executor = UnitScriptedPollExecutor::new(vec![
-            Err(PollCycleError::Failed("upstream 502 bad gateway".to_string())),
+            Err(PollCycleError::Failed(
+                "upstream 502 bad gateway".to_string(),
+            )),
             Err(PollCycleError::Cancelled),
         ]);
 

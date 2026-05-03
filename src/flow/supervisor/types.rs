@@ -289,7 +289,14 @@ mod tests {
         let reset = chrono::DateTime::parse_from_rfc3339("2026-04-28T14:00:00Z")
             .expect("valid rfc3339")
             .with_timezone(&chrono::Utc);
-        record_last_error(&map, "flow-rate", "github_error", "rate limited", Some(reset)).await;
+        record_last_error(
+            &map,
+            "flow-rate",
+            "github_error",
+            "rate limited",
+            Some(reset),
+        )
+        .await;
         assert!(
             logs_contain("body="),
             "tracing event must surface the message body under the `body=` field \

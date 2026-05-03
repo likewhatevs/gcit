@@ -1441,10 +1441,7 @@ mod tests {
             out.push_str(&format!("repo          = \"{repo}\"\n"));
             out.push_str(&format!("workflow      = \"{workflow}\"\n"));
             out.push_str(&format!("ref           = \"{ref_name}\"\n"));
-            out.push_str(&format!(
-                "credential_id = \"{}\"\n",
-                credential_id.as_str(),
-            ));
+            out.push_str(&format!("credential_id = \"{}\"\n", credential_id.as_str(),));
         }
         out
     }
@@ -1672,7 +1669,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_reload_disable_with_url_change_cancels_handle_and_emits_flow_removed_for_url_reset() {
+    async fn run_reload_disable_with_url_change_cancels_handle_and_emits_flow_removed_for_url_reset(
+    ) {
         // Same as above but with a URL change. compute_reload_actions
         // returns Disable{url_changed:true}, which adds the flow name
         // to `url_resets` and emits FlowRemoved so a future re-enable

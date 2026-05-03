@@ -883,7 +883,9 @@ mod tests {
             err.contains("supervisor reply dropped"),
             "trigger must surface 'supervisor reply dropped'; got: {err}",
         );
-        supervisor_stub.await.expect("supervisor stub task panicked");
+        supervisor_stub
+            .await
+            .expect("supervisor stub task panicked");
     }
 
     #[tokio::test]
@@ -922,7 +924,9 @@ mod tests {
             err.contains("supervisor reply dropped"),
             "reload must surface 'supervisor reply dropped'; got: {err}",
         );
-        supervisor_stub.await.expect("supervisor stub task panicked");
+        supervisor_stub
+            .await
+            .expect("supervisor stub task panicked");
     }
 
     /// Construct a Config carrying a single FlowConfig. `enabled`

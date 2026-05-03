@@ -1,0 +1,11 @@
+[advisories]
+ignore = [
+    # rsa 0.9.x Marvin timing attack. No fixed version; pulled in
+    # transitively via octocrab -> jsonwebtoken. gcit never performs
+    # RSA decryption (only JWT signing via RS256).
+    "RUSTSEC-2023-0071",
+    # gix-date 0.9.4 non-utf8 TimeBuf::as_str. Pulled in transitively
+    # via vergen-gix -> gix 0.71 (build-time only). gcit never calls
+    # TimeBuf::as_str; vergen-gix stable has no newer gix version.
+    "RUSTSEC-2025-0140",
+]

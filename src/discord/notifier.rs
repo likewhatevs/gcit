@@ -489,7 +489,11 @@ mod tests {
             handlebars(),
         );
         let err = n
-            .on_run_complete(&test_run_context(), &test_summary(), &CancellationToken::new())
+            .on_run_complete(
+                &test_run_context(),
+                &test_summary(),
+                &CancellationToken::new(),
+            )
             .await
             .expect_err("undefined-variable template must surface as Err");
         match err {
@@ -529,7 +533,10 @@ mod tests {
             .await
             .expect_err("pre-cancelled token must surface as Err");
         match err {
-            NotifyError::Transient { source, retry_after } => {
+            NotifyError::Transient {
+                source,
+                retry_after,
+            } => {
                 let msg = source.to_string();
                 assert!(
                     msg.contains("cancelled"),
@@ -547,5 +554,4 @@ mod tests {
             other => panic!("expected Transient cancel, got {other:?}"),
         }
     }
-
 }

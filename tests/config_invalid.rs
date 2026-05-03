@@ -1283,9 +1283,9 @@ credential_id = "c"
     let errors = gcit::config::load_str(raw, std::path::Path::new("inline"))
         .expect_err("poll.source_interval=5M must reject");
     let any = errors.iter().any(|e| match e {
-        gcit::config::ConfigError::Validate {
-            field, message, ..
-        } => field == "poll.source_interval" && message.contains("'M' means months"),
+        gcit::config::ConfigError::Validate { field, message, .. } => {
+            field == "poll.source_interval" && message.contains("'M' means months")
+        }
         _ => false,
     });
     assert!(
@@ -1323,18 +1323,24 @@ fire_on = ["run_complete", "run_complete", "job_complete", "job_complete"]
 "#;
     let errors = gcit::config::load_str(raw, std::path::Path::new("inline"))
         .expect_err("multiple distinct fire_on duplicates must reject");
-    let dup_run_complete = errors.iter().filter(|e| match e {
-        gcit::config::ConfigError::Validate { field, message, .. } => {
-            field.contains("fire_on") && message.contains("duplicate event 'run_complete'")
-        }
-        _ => false,
-    }).count();
-    let dup_job_complete = errors.iter().filter(|e| match e {
-        gcit::config::ConfigError::Validate { field, message, .. } => {
-            field.contains("fire_on") && message.contains("duplicate event 'job_complete'")
-        }
-        _ => false,
-    }).count();
+    let dup_run_complete = errors
+        .iter()
+        .filter(|e| match e {
+            gcit::config::ConfigError::Validate { field, message, .. } => {
+                field.contains("fire_on") && message.contains("duplicate event 'run_complete'")
+            }
+            _ => false,
+        })
+        .count();
+    let dup_job_complete = errors
+        .iter()
+        .filter(|e| match e {
+            gcit::config::ConfigError::Validate { field, message, .. } => {
+                field.contains("fire_on") && message.contains("duplicate event 'job_complete'")
+            }
+            _ => false,
+        })
+        .count();
     assert_eq!(
         dup_run_complete, 1,
         "expected exactly one error per distinct duplicate; run_complete: {:#?}",
@@ -1530,8 +1536,7 @@ fn validate_spool_writability_not_writable_emits_not_writable_error() {
         } => {
             field == "destination.local_mail.user"
                 && message.contains("not writable")
-                && (suggestion.contains("ReadWritePaths")
-                    || suggestion.contains("chmod 0660"))
+                && (suggestion.contains("ReadWritePaths") || suggestion.contains("chmod 0660"))
         }
         _ => false,
     });
@@ -1651,14 +1656,20 @@ user = "bob"
         .expect("multi-local_mail config must parse");
     let td = tempfile::TempDir::new().unwrap();
     let errors = gcit::config::validate::validate_spool_writability(&cfg, Some(td.path()));
-    let alice_err = errors.iter().filter(|e| match e {
-        gcit::config::ConfigError::Validate { value, .. } => value == "alice",
-        _ => false,
-    }).count();
-    let bob_err = errors.iter().filter(|e| match e {
-        gcit::config::ConfigError::Validate { value, .. } => value == "bob",
-        _ => false,
-    }).count();
+    let alice_err = errors
+        .iter()
+        .filter(|e| match e {
+            gcit::config::ConfigError::Validate { value, .. } => value == "alice",
+            _ => false,
+        })
+        .count();
+    let bob_err = errors
+        .iter()
+        .filter(|e| match e {
+            gcit::config::ConfigError::Validate { value, .. } => value == "bob",
+            _ => false,
+        })
+        .count();
     assert_eq!(
         alice_err, 1,
         "expected exactly one error naming 'alice'; got: {:#?}",
@@ -1710,14 +1721,17 @@ credential_id = "c"
 "#;
     let errors = gcit::config::load_str(raw, std::path::Path::new("inline"))
         .expect_err("malformed duration must reject");
-    let parse_count = errors.iter().filter(|e| match e {
-        gcit::config::ConfigError::Parse { message, .. } => {
-            message.contains("poll.source_interval")
-                && message.contains("invalid duration")
-                && message.contains("\"xyz\"")
-        }
-        _ => false,
-    }).count();
+    let parse_count = errors
+        .iter()
+        .filter(|e| match e {
+            gcit::config::ConfigError::Parse { message, .. } => {
+                message.contains("poll.source_interval")
+                    && message.contains("invalid duration")
+                    && message.contains("\"xyz\"")
+            }
+            _ => false,
+        })
+        .count();
     assert_eq!(
         parse_count, 1,
         "malformed humantime must surface as a Parse variant naming the field, value, and 'invalid duration'; got: {:#?}",
@@ -1725,10 +1739,13 @@ credential_id = "c"
     );
     // Symmetrically: NO Validate variant for source_interval — the
     // parse failure short-circuits before the bounded check.
-    let validate_count = errors.iter().filter(|e| match e {
-        gcit::config::ConfigError::Validate { field, .. } => field == "poll.source_interval",
-        _ => false,
-    }).count();
+    let validate_count = errors
+        .iter()
+        .filter(|e| match e {
+            gcit::config::ConfigError::Validate { field, .. } => field == "poll.source_interval",
+            _ => false,
+        })
+        .count();
     assert_eq!(
         validate_count, 0,
         "Parse failure must NOT also emit a Validate (range check is short-circuited): {:#?}",
@@ -2018,8 +2035,7 @@ kind = "discord_webhook"
         .expect_err("discord_webhook missing credential_id must reject");
     let any = errors.iter().any(|e| match e {
         gcit::config::ConfigError::Validate { field, message, .. } => {
-            field == "destination.credential_id"
-                && message.contains("required for discord_webhook")
+            field == "destination.credential_id" && message.contains("required for discord_webhook")
         }
         _ => false,
     });

@@ -1351,7 +1351,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drain_pending_triggers_processes_each_buffered_trigger_and_records_last_error_per_failed_dispatch() {
+    async fn drain_pending_triggers_processes_each_buffered_trigger_and_records_last_error_per_failed_dispatch(
+    ) {
         // The cancel arm of `run_with_executor` calls
         // `drain_pending_triggers` to flush triggers the poll task
         // had already enqueued before observing cancel. Each drained
@@ -1429,9 +1430,9 @@ mod tests {
         // failed drain overwrites earlier entries (record_last_error
         // uses BTreeMap::insert).
         let errs = last_errors.lock().await;
-        let entry = errs
-            .get(&params.flow_name)
-            .expect("each failed drain must record a last_error; the final overwrite must be present");
+        let entry = errs.get(&params.flow_name).expect(
+            "each failed drain must record a last_error; the final overwrite must be present",
+        );
         assert_eq!(
             entry.kind(),
             "dispatch",
@@ -1591,7 +1592,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_trigger_with_executor_success_state_writer_dropped_returns_state_writer_error() {
+    async fn handle_trigger_with_executor_success_state_writer_dropped_returns_state_writer_error()
+    {
         // The Success arm sends RunStarted to state_tx. If the
         // receiver was dropped (writer thread exited), the send
         // returns Err; `handle_trigger` surfaces this as
@@ -1650,10 +1652,7 @@ mod tests {
         // before.
         let mut inputs = BTreeMap::new();
         inputs.insert("flow_name".to_string(), "{{flow.name}}".to_string());
-        inputs.insert(
-            "ref_name".to_string(),
-            "{{source.ref_name}}".to_string(),
-        );
+        inputs.insert("ref_name".to_string(), "{{source.ref_name}}".to_string());
         inputs.insert(
             "static_value".to_string(),
             "literal text no template".to_string(),
@@ -1693,7 +1692,9 @@ mod tests {
                 assert_eq!(run_id, 555);
                 assert_eq!(flow, "unit-flow");
             }
-            other => panic!("Success path with rendered inputs must emit RunStarted; got: {other:?}"),
+            other => {
+                panic!("Success path with rendered inputs must emit RunStarted; got: {other:?}")
+            }
         }
         assert_eq!(monitors.len(), 1, "monitor task must be spawned on success");
         while monitors.join_next().await.is_some() {}

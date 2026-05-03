@@ -348,14 +348,7 @@ pub(super) async fn spawn_flow(
             // unambiguous which flow is currently disabled in
             // `gcit status` / journald.
             let with_flow = format!("flow `{}`: {}", flow.name, e);
-            record_last_error(
-                &ctx.last_errors,
-                &flow.name,
-                "credential",
-                &with_flow,
-                None,
-            )
-            .await;
+            record_last_error(&ctx.last_errors, &flow.name, "credential", &with_flow, None).await;
             warn!(
                 target: "gcit::supervisor",
                 flow = %flow.name,
@@ -804,12 +797,13 @@ mod tests {
             std::env::remove_var(credential_id.to_env_var());
         }
         let mut flow = flow_no_destinations("flow-bad-discord");
-        flow.destination
-            .push(Destination::DiscordWebhook(crate::config::DiscordWebhookConfig {
+        flow.destination.push(Destination::DiscordWebhook(
+            crate::config::DiscordWebhookConfig {
                 credential_id: credential_id.clone(),
                 fire_on: vec![FireEvent::RunStart],
                 template: DiscordTemplateConfig::default(),
-            }));
+            },
+        ));
         // Pool with no config_dir → step 3 skipped; with no env var and
         // no $CREDENTIALS_DIRECTORY → steps 1+2 also skipped; the
         // pool's resolve_secret falls through to the step-4 error.
@@ -850,8 +844,8 @@ mod tests {
     // -----------------------------------------------------------------
 
     use crate::config::{Config, HttpConfig, LogConfig, PollDefaults};
-    use crate::flow::supervisor::FlowLastError;
     use crate::flow::supervisor::types::FlowRegistry;
+    use crate::flow::supervisor::FlowLastError;
 
     /// Build a minimal `Config` wrapping the supplied flow. spawn_flow
     /// reads `config.http.request_timeout` and `config.poll` — both
@@ -903,7 +897,8 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial]
-    async fn spawn_flow_credential_resolution_failure_records_credential_kind_last_error_and_skips_spawn() {
+    async fn spawn_flow_credential_resolution_failure_records_credential_kind_last_error_and_skips_spawn(
+    ) {
         // The action's credential_id resolves to nothing:
         // CREDENTIALS_DIRECTORY scrubbed, env var scrubbed,
         // CredentialPool::default() has no config_dir, so
@@ -911,8 +906,7 @@ mod tests {
         // acquire_github wraps it; spawn_flow records last_error.kind=
         // "credential" with a "flow `<name>`:" prefix and returns
         // BEFORE spawning either task.
-        let credential_id =
-            CredentialId::new("nonexistent-action-cred").expect("valid id");
+        let credential_id = CredentialId::new("nonexistent-action-cred").expect("valid id");
         // SAFETY: gated by #[serial]; single-threaded env mutation.
         unsafe {
             std::env::remove_var("CREDENTIALS_DIRECTORY");
@@ -970,7 +964,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_flow_notifier_build_failure_records_notifier_setup_kind_last_error_and_skips_spawn() {
+    async fn spawn_flow_notifier_build_failure_records_notifier_setup_kind_last_error_and_skips_spawn(
+    ) {
         // build_notifiers fails when LocalMailNotifier::new rejects an
         // invalid unix user (a "/" in the user name surfaces
         // ContainsSlash from validate_user — see

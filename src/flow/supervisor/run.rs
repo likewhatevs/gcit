@@ -575,9 +575,8 @@ mod tests {
 
     #[test]
     fn daemon_error_control_listener_display_starts_with_control_listener_prefix() {
-        let rendered =
-            DaemonError::ControlListener("bind socket.path: address in use".to_string())
-                .to_string();
+        let rendered = DaemonError::ControlListener("bind socket.path: address in use".to_string())
+            .to_string();
         assert!(
             rendered.starts_with("control listener: "),
             "ControlListener Display must lead with 'control listener: '; got: {rendered}",
@@ -632,8 +631,12 @@ mod tests {
         // other than State (Config carries a Vec, the rest carry
         // String) returns None. Pin all four so a future variant rename
         // doesn't silently start surfacing a synthesized source.
-        assert!(DaemonError::Config(vec![make_config_error()]).source().is_none());
-        assert!(DaemonError::ControlListener("x".to_string()).source().is_none());
+        assert!(DaemonError::Config(vec![make_config_error()])
+            .source()
+            .is_none());
+        assert!(DaemonError::ControlListener("x".to_string())
+            .source()
+            .is_none());
         assert!(DaemonError::SignalSetup("y".to_string()).source().is_none());
         assert!(DaemonError::HttpClient("z".to_string()).source().is_none());
     }

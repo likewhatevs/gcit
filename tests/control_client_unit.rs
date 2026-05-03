@@ -76,7 +76,9 @@ async fn connect_to_bound_listener_succeeds_and_returns_client() {
     let (_listener, path) = bind_listener(&td);
     // Client::connect returns Ok(Self { framed }) — drop the value to
     // exercise the connection-close path through Drop.
-    let _client = Client::connect(&path).await.expect("connect to bound listener");
+    let _client = Client::connect(&path)
+        .await
+        .expect("connect to bound listener");
 }
 
 #[tokio::test]
@@ -97,8 +99,7 @@ async fn send_round_trips_request_id_through_response() {
             .await
             .expect("server must receive one frame")
             .expect("frame decode");
-        let req: Request =
-            serde_json::from_slice(&bytes).expect("server-side request deserialize");
+        let req: Request = serde_json::from_slice(&bytes).expect("server-side request deserialize");
         // Echo the id verbatim — the client must accept this as a
         // matching response.
         assert_eq!(req.id(), id, "server saw mismatched request id");
@@ -244,9 +245,8 @@ async fn send_returns_timed_out_when_server_holds_open_without_replying() {
 
     let mut client = Client::connect(&path).await.expect("connect");
     // Spawn the send so we can advance the clock from this task.
-    let send_task = tokio::spawn(async move {
-        client.send(Request::Reload { id: Uuid::new_v4() }).await
-    });
+    let send_task =
+        tokio::spawn(async move { client.send(Request::Reload { id: Uuid::new_v4() }).await });
 
     // Yield so the send task gets a chance to install its timeout
     // future before we advance the clock past it. With paused time,

@@ -336,7 +336,9 @@ impl Handler for ErrHandler {
     ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send {
         async move { Err("status handler failure".to_string()) }
     }
-    fn reload(&self) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send {
+    fn reload(
+        &self,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + Send {
         async move { Err("reload handler failure".to_string()) }
     }
     fn version(
@@ -372,10 +374,7 @@ async fn trigger_handler_err_routes_to_response_error() {
     send_frame(&mut client, &serde_json::to_vec(&req).unwrap()).await;
     let resp: Response = serde_json::from_slice(&recv_frame(&mut client).await).unwrap();
     match resp {
-        Response::Error {
-            id: rid,
-            message,
-        } => {
+        Response::Error { id: rid, message } => {
             assert_eq!(rid, id, "Error response must echo request id");
             assert_eq!(message, "trigger handler failure");
         }
