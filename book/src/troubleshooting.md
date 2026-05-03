@@ -7,18 +7,7 @@ runtime state).
 
 ## `gcit check` exit states
 
-| state | meaning | exit |
-|---|---|---|
-| 1 | Config parses, validates, and every credential resolves. | `0` |
-| 2 | Config parse / validation error, OR credential id referenced but not declared. | `78` (`EX_CONFIG`) |
-| 3 | Config validates AND `$CREDENTIALS_DIRECTORY` is set + real but the credential is missing right now. | `0` with an `INFO` note |
-
-State 3 lets `gcit check` run from a developer shell where
-`$CREDENTIALS_DIRECTORY` is not yet populated without falsely reporting a
-config bug — the daemon will receive the credential at runtime via
-`LoadCredential=`. Run `gcit check` from inside the unit (e.g.
-`systemctl start gcit-check.service` if you wire one up) for an end-to-
-end check that exercises step 1 of the resolution chain.
+See [Credential management — gcit check exit semantics](./credentials.md#gcit-check-exit-semantics).
 
 `gcit check` prints **every** error in one pass rather than stopping at
 the first, so you can fix multiple issues per edit cycle.
@@ -151,21 +140,9 @@ credential id).
 ### Workflow runs not correlated
 
 If gcit dispatches but never logs a correlated `Run.id`, the workflow
-likely doesn't declare the `gcit_run_id` input. Add:
-
-```yaml
-on:
-  workflow_dispatch:
-    inputs:
-      gcit_run_id:
-        type: string
-
-run-name: gcit-${{ inputs.gcit_run_id }}
-```
-
-Without `run-name`, gcit falls back to `head_sha + ?created>=<dispatch
-iso>` and selects the most recent matching run, emitting a `WARN`
-recommending the `run-name` directive.
+likely doesn't declare the `gcit_run_id` input. See [Polling
+strategies — Workflow dispatch correlation](./polling.md#workflow-dispatch-correlation)
+for the run-name YAML.
 
 ### `local_mail` notifier returns `permission denied`
 

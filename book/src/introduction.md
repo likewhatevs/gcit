@@ -14,7 +14,7 @@ network failure, or auth error in one flow cannot crash the daemon or affect
 other flows.
 
 This book is the operator manual: how to install, configure, and run gcit.
-For badges, license, and source layout see the project README.
+For badges and license see the project README.
 
 ## Why gcit
 
