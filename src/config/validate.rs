@@ -125,7 +125,7 @@ enum SpoolProbe {
     /// `access(W_OK)` returned EACCES. Either the mode bits exclude
     /// write for the daemon's effective uid+gid, or systemd's
     /// `ProtectSystem=strict` plus a missing
-    /// `ReadWritePaths=/var/mail` is blocking the write.
+    /// `BindPaths=/var/mail` is blocking the write.
     NotWritable,
     /// Any other errno (EROFS, EIO, ...). Surfaces verbatim with the
     /// errno number so operators can look it up.
@@ -457,7 +457,7 @@ pub fn validate_spool_writability(cfg: &Config, spool_root: Option<&Path>) -> Ve
                                 spool_path.display(),
                             ),
                             format!(
-                                "ensure the daemon is in the mail group and `chmod 0660 {p}`, OR add `ReadWritePaths={d}` to gcit.service",
+                                "ensure the daemon is in the mail group and `chmod 0660 {p}`, OR add `BindPaths={d}` to gcit.service",
                                 p = spool_path.display(),
                                 d = resolved_spool_root.display(),
                             ),

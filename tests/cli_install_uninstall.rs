@@ -1439,3 +1439,215 @@ fn install_dry_run_help_text_present() {
         .stdout(predicate::str::contains("--dry-run"))
         .stdout(predicate::str::contains("Render the systemd service unit"));
 }
+
+// ---------------------------------------------------------------------
+// Coverage gaps A-G surfaced by the tester after the initial dry-run
+// tests landed. Each pins a path the original 6 didn't exercise.
+// ---------------------------------------------------------------------
+
+// Gap A: --system scope LoadCredential paths.
+// User-scope dry-run pins %E/gcit/credentials/. System-scope must use
+// the FHS path /etc/gcit/credentials/ instead (per render_service_unit
+// branch in src/systemd/unit.rs).
+#[test]
+fn install_system_dry_run_emits_system_scope_load_credential_paths() {
+    let td = TempDir::new().unwrap();
+    let cfg = write_minimal_config(td.path());
+    let output = isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--system")
+        .arg("--dry-run")
+        .output()
+        .expect("install --dry-run must run");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("LoadCredential=github_pat:/etc/gcit/credentials/github_pat"),
+        "system-scope dry-run must source credentials from /etc/gcit; got: {stdout}",
+    );
+    assert!(
+        !stdout.contains("%E/gcit/credentials"),
+        "system-scope dry-run must not emit the user-scope %E/ token; got: {stdout}",
+    );
+}
+
+// Gap B: --system + local_mail emits the static User=gcit/Group=mail
+// form (not DynamicUser=yes) and the BindPaths=/var/mail
+// directive. The --user + local_mail combination is rejected before
+// dry-run runs, so the only path that exercises this branch is
+// --system. Pinned: dry-run renders the static-user variant verbatim.
+#[test]
+fn install_system_dry_run_with_local_mail_emits_static_user_and_var_mail_path() {
+    let td = TempDir::new().unwrap();
+    let cfg = write_local_mail_config(td.path());
+    let output = isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--system")
+        .arg("--dry-run")
+        .output()
+        .expect("install --dry-run must run");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("User=gcit"),
+        "system-scope local_mail dry-run must emit User=gcit; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("Group=mail"),
+        "system-scope local_mail dry-run must emit Group=mail; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("SupplementaryGroups=mail"),
+        "system-scope local_mail dry-run must emit SupplementaryGroups=mail; got: {stdout}",
+    );
+    assert!(
+        !stdout.contains("DynamicUser=yes"),
+        "system-scope local_mail dry-run must NOT emit DynamicUser=yes; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("BindPaths=/var/mail"),
+        "system-scope local_mail dry-run must emit BindPaths=/var/mail; got: {stdout}",
+    );
+}
+
+// Gap C: pre-existing managed files survive dry-run. The
+// silent-overwrite gate at install.rs is BYPASSED by the dry-run
+// short-circuit. With a sentinel pre-written into gcit.service,
+// dry-run must exit 0 AND leave the sentinel byte-for-byte.
+#[test]
+fn install_user_dry_run_with_pre_existing_files_does_not_overwrite() {
+    let td = TempDir::new().unwrap();
+    let cfg = write_minimal_config(td.path());
+    let paths = user_scope_paths(td.path());
+    std::fs::create_dir_all(paths.service_unit.parent().unwrap()).unwrap();
+    let sentinel = b"DRY_RUN_MUST_NOT_OVERWRITE_THIS_SENTINEL";
+    std::fs::write(&paths.service_unit, sentinel).unwrap();
+    isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .assert()
+        .code(0);
+    let after = std::fs::read(&paths.service_unit).expect("file still exists");
+    assert_eq!(
+        after, sentinel,
+        "dry-run must not overwrite pre-existing files"
+    );
+}
+
+// Gap D: --dry-run + --force is a no-op for --force. The early
+// short-circuit returns before the silent-overwrite gate fires, so
+// --force changes nothing. Pinned: same exit + same stdout shape as
+// without --force.
+#[test]
+fn install_user_dry_run_with_force_flag_behaves_identically() {
+    let td = TempDir::new().unwrap();
+    let cfg = write_minimal_config(td.path());
+    let without_force = isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .output()
+        .expect("install --dry-run must run");
+    assert_eq!(without_force.status.code(), Some(0));
+    let with_force = isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .arg("--force")
+        .output()
+        .expect("install --dry-run --force must run");
+    assert_eq!(with_force.status.code(), Some(0));
+    assert_eq!(
+        without_force.stdout, with_force.stdout,
+        "--force must not change dry-run stdout",
+    );
+}
+
+// Gap E: dry-run without --non-interactive is still non-interactive
+// because the early-return fires before the prompt. assert_cmd's
+// default closed-stdin would otherwise trigger the prompt's read
+// failure. Pinned: dry-run sans --non-interactive exits 0 cleanly.
+#[test]
+fn install_user_dry_run_without_non_interactive_exits_zero() {
+    let td = TempDir::new().unwrap();
+    let cfg = write_minimal_config(td.path());
+    isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("[Unit]"))
+        .stdout(predicate::str::contains("WantedBy=default.target"));
+}
+
+// Gap F: schema-invalid config. The malformed-TOML test exercises
+// the parse-stage Err arm; this exercises the schema-validation Err
+// arm. Both should map to EX_CONFIG=78 in dry-run.
+#[test]
+fn install_user_dry_run_with_schema_invalid_config_exits_config_78() {
+    let cfg = std::path::Path::new("tests/resources/config/invalid/duplicate_flow_name.toml");
+    let td = TempDir::new().unwrap();
+    isolated_command(td.path())
+        .arg("--config")
+        .arg(cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .assert()
+        .code(78);
+}
+
+// Gap G: expanded stdout-discipline markers. The original test pins
+// 7 markers; the tester surfaced 6 more sites in cli/install.rs that
+// must not leak. Group both old + new markers into one assertion list
+// so a regression at any of the print sites surfaces.
+#[test]
+fn install_user_dry_run_stdout_omits_every_install_print_marker() {
+    let td = TempDir::new().unwrap();
+    let cfg = write_minimal_config(td.path());
+    let output = isolated_command(td.path())
+        .arg("--config")
+        .arg(&cfg)
+        .arg("install")
+        .arg("--user")
+        .arg("--dry-run")
+        .output()
+        .expect("install --dry-run must run");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for marker in [
+        "# Credentials",
+        "obtain at:",
+        "chmod 0600",
+        "# Files gcit will write",
+        "# Manifest",
+        "# Next steps",
+        "# Service user model",
+        "Proceed?",
+        "install cancelled",
+        "Wrote ",
+        "daemon-reload",
+        "Creating system user",
+        "[exists]",
+        "[new]",
+    ] {
+        assert!(
+            !stdout.contains(marker),
+            "dry-run stdout must not leak install marker `{marker}`; got: {stdout}",
+        );
+    }
+}

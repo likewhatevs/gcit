@@ -62,8 +62,8 @@ title       = "{{flow.name}}: {{run.conclusion}}"
 description = "linux@{{source.sha_short}} -> {{action.repo}}/{{action.workflow}}"
 
 # local_mail appends an mbox-formatted message to /var/mail/<user>; no
-# SMTP, no MTA. The unit's `ReadWritePaths=/var/mail` makes the spool
-# writable under `ProtectSystem=strict`.
+# SMTP, no MTA. The unit's `BindPaths=/var/mail` makes the spool
+# visible inside the RootDirectory chroot.
 [[flow.destination]]
 kind    = "local_mail"
 user    = "ops"

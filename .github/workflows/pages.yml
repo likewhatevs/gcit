@@ -1,0 +1,40 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@mdbook
+      - uses: taiki-e/install-action@just
+      - name: Install mdbook-linkcheck2
+        run: cargo install mdbook-linkcheck2 --locked
+      - name: just ci-docs
+        run: just ci-docs
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: book/book/html
+
+      - id: deploy
+        uses: actions/deploy-pages@v5

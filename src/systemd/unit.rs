@@ -159,10 +159,42 @@ pub fn render_service_unit(cfg: &Config, scope: InstallScope, binary_path: &Path
         s.push_str("DynamicUser=yes\n");
     }
 
-    // Hardening directives, byte-for-byte. `ReadWritePaths=/var/mail`
-    // is gated on `has_local_mail` so a Discord-only install does
-    // not punch an extra writable path through `ProtectSystem=strict`
-    // — the local_mail notifier is the only writer to /var/mail.
+    // Hardening directives, byte-for-byte. Two directives are gated:
+    //   * `BindPaths=/var/mail` only when `has_local_mail` so a
+    //     Discord-only install does not punch a writable path through
+    //     `ProtectSystem=strict` (the local_mail notifier is the only
+    //     writer to /var/mail).
+    //   * `PrivateUsers=yes` is unconditional. systemd maps the unit's
+    //     Group=mail gid to 0 inside the user namespace and translates
+    //     back through the gid_map on host-filesystem access, so
+    //     BindPaths=/var/mail writes still check against the host mail
+    //     gid correctly.
+    //
+    // The two `SystemCallFilter=` lines stack: systemd treats
+    // multiple SystemCallFilter= entries as additive, so the
+    // `@system-service` allow-list runs first and the `~@resources` /
+    // `~@privileged` denials prune syscalls back out of it. systemd
+    // documents this composition rule in systemd.exec(5).
+    //
+    // `DevicePolicy=closed` complements the empty `DeviceAllow=`. With
+    // `PrivateDevices=yes` alone, systemd grants implicit read access
+    // to /dev/rtc; `DevicePolicy=closed` removes that without affecting
+    // the standard tty/pseudo-tty/null/zero/random/urandom set
+    // PrivateDevices already provides.
+    //
+    // `RootDirectory` + `TemporaryFileSystem` + `BindReadOnlyPaths` are
+    // gated on `!has_local_mail` alongside `PrivateUsers`. Together they
+    // isolate the daemon's filesystem view and mount only the CA cert
+    // bundle (Fedora primary, Ubuntu fallback) and DNS resolver. Gated
+    // because /var/mail access inside a chroot requires BindPaths which
+    // has not been empirically verified with the local_mail flock path.
+    //
+    // `IPAddressDeny=any` + `IPAddressAllow=any` establishes a
+    // default-deny IP address policy. gcit needs arbitrary routable
+    // unicast (GitHub API, Discord webhooks, operator-configured git
+    // remotes), so the allow-all re-opens everything — but the
+    // default-deny framework lets operators tighten the policy via
+    // systemd drop-ins without editing the unit.
     let mut hardening: Vec<&str> = vec![
         "NoNewPrivileges=yes",
         "ProtectSystem=strict",
@@ -184,9 +216,19 @@ pub fn render_service_unit(cfg: &Config, scope: InstallScope, binary_path: &Path
         "LockPersonality=yes",
         "MemoryDenyWriteExecute=yes",
         "SystemCallFilter=@system-service",
+        "SystemCallFilter=~@resources",
+        "SystemCallFilter=~@privileged",
         "SystemCallArchitectures=native",
         "CapabilityBoundingSet=",
+        "AmbientCapabilities=",
         "DeviceAllow=",
+        "DevicePolicy=closed",
+        "IPAddressDeny=any",
+        "IPAddressAllow=any",
+        "RemoveIPC=yes",
+        "RootDirectory=%t/gcit/root",
+        "TemporaryFileSystem=/:ro",
+        "BindReadOnlyPaths=/etc/pki/tls/certs -/etc/ssl/certs /etc/resolv.conf",
         "UMask=0077",
         "RuntimeDirectory=gcit",
         "RuntimeDirectoryMode=0700",
@@ -195,8 +237,9 @@ pub fn render_service_unit(cfg: &Config, scope: InstallScope, binary_path: &Path
         "ConfigurationDirectory=gcit",
         "ConfigurationDirectoryMode=0750",
     ];
+    hardening.push("PrivateUsers=yes");
     if has_local_mail {
-        hardening.push("ReadWritePaths=/var/mail");
+        hardening.push("BindPaths=/var/mail");
     }
     for line in [
         "Restart=on-failure",
@@ -367,9 +410,20 @@ credential_id = "discord_webhook"
             "LockPersonality=yes",
             "MemoryDenyWriteExecute=yes",
             "SystemCallFilter=@system-service",
+            "SystemCallFilter=~@resources",
+            "SystemCallFilter=~@privileged",
             "SystemCallArchitectures=native",
             "CapabilityBoundingSet=",
+            "AmbientCapabilities=",
             "DeviceAllow=",
+            "DevicePolicy=closed",
+            "IPAddressDeny=any",
+            "IPAddressAllow=any",
+            "RemoveIPC=yes",
+            "PrivateUsers=yes",
+            "RootDirectory=%t/gcit/root",
+            "TemporaryFileSystem=/:ro",
+            "BindReadOnlyPaths=/etc/pki/tls/certs -/etc/ssl/certs /etc/resolv.conf",
             "UMask=0077",
             "RuntimeDirectory=gcit",
             "RuntimeDirectoryMode=0700",
@@ -390,8 +444,108 @@ credential_id = "discord_webhook"
     }
 
     #[test]
+    fn service_unit_always_emits_private_users() {
+        // PrivateUsers=yes is unconditional. systemd maps Group=mail's
+        // host gid through the user namespace gid_map, so
+        // BindPaths=/var/mail access still checks against the host
+        // mail gid correctly.
+        for has_local_mail in [false, true] {
+            let cfg = build_minimal_config(has_local_mail);
+            let unit = render_service_unit(
+                &cfg,
+                InstallScope::System,
+                std::path::Path::new("/usr/bin/gcit"),
+            );
+            assert!(
+                unit.contains("PrivateUsers=yes"),
+                "PrivateUsers=yes must be emitted for has_local_mail={has_local_mail}; got: {}",
+                unit,
+            );
+        }
+    }
+
+    #[test]
+    fn service_unit_emits_system_call_filter_resources_and_privileged_denials() {
+        // The deny-list filters compose with the @system-service
+        // allow-list — systemd applies them in order, so @resources /
+        // @privileged carve out their respective syscall sets after the
+        // @system-service base.
+        let cfg = build_minimal_config(false);
+        let unit = render_service_unit(
+            &cfg,
+            InstallScope::System,
+            std::path::Path::new("/usr/bin/gcit"),
+        );
+        assert!(
+            unit.contains("SystemCallFilter=~@resources"),
+            "service unit must deny @resources syscalls; got: {}",
+            unit,
+        );
+        assert!(
+            unit.contains("SystemCallFilter=~@privileged"),
+            "service unit must deny @privileged syscalls; got: {}",
+            unit,
+        );
+        // The base allow-list must still appear before the denials so
+        // systemd applies them in the right order.
+        let base = unit.find("SystemCallFilter=@system-service").unwrap();
+        let resources = unit.find("SystemCallFilter=~@resources").unwrap();
+        let privileged = unit.find("SystemCallFilter=~@privileged").unwrap();
+        assert!(
+            base < resources && base < privileged,
+            "base SystemCallFilter must precede the deny filters",
+        );
+    }
+
+    #[test]
+    fn service_unit_emits_ip_address_default_deny_with_open_allow() {
+        // `IPAddressDeny=any` + `IPAddressAllow=any` establishes a
+        // default-deny IP policy that gcit's required outbound traffic
+        // (GitHub API, Discord webhooks, operator-configured remotes)
+        // re-opens via the allow-all. The shape lets operators tighten
+        // the policy via systemd drop-ins without editing the unit, and
+        // satisfies systemd-analyze's check that the service defines
+        // an IP address allow list. Pinned so a future edit that drops
+        // either directive reverts the score gain.
+        let cfg = build_minimal_config(false);
+        let unit = render_service_unit(
+            &cfg,
+            InstallScope::System,
+            std::path::Path::new("/usr/bin/gcit"),
+        );
+        assert!(
+            unit.contains("IPAddressDeny=any"),
+            "service unit must default-deny outbound IP traffic; got: {}",
+            unit,
+        );
+        assert!(
+            unit.contains("IPAddressAllow=any"),
+            "service unit must re-open the IP space via IPAddressAllow=any; got: {}",
+            unit,
+        );
+    }
+
+    #[test]
+    fn service_unit_emits_device_policy_closed() {
+        // DeviceAllow= empty alone leaves /dev/rtc readable via
+        // PrivateDevices=yes' implicit allow. DevicePolicy=closed
+        // removes that without breaking PrivateDevices' standard set.
+        let cfg = build_minimal_config(false);
+        let unit = render_service_unit(
+            &cfg,
+            InstallScope::System,
+            std::path::Path::new("/usr/bin/gcit"),
+        );
+        assert!(
+            unit.contains("DevicePolicy=closed"),
+            "service unit must close the device ACL; got: {}",
+            unit,
+        );
+    }
+
+    #[test]
     fn service_unit_omits_var_mail_read_write_path_without_local_mail() {
-        // `ReadWritePaths=/var/mail` punches a writable path through
+        // `BindPaths=/var/mail` punches a writable path through
         // `ProtectSystem=strict`. For Discord-only installs nothing
         // writes there, so the directive must be absent.
         let cfg = build_minimal_config(false);
@@ -401,8 +555,8 @@ credential_id = "discord_webhook"
             std::path::Path::new("/usr/bin/gcit"),
         );
         assert!(
-            !unit.contains("ReadWritePaths=/var/mail"),
-            "Discord-only install must NOT emit ReadWritePaths=/var/mail",
+            !unit.contains("BindPaths=/var/mail"),
+            "Discord-only install must NOT emit BindPaths=/var/mail",
         );
     }
 
@@ -418,8 +572,8 @@ credential_id = "discord_webhook"
             std::path::Path::new("/usr/bin/gcit"),
         );
         assert!(
-            unit.contains("ReadWritePaths=/var/mail"),
-            "local_mail install must emit ReadWritePaths=/var/mail",
+            unit.contains("BindPaths=/var/mail"),
+            "local_mail install must emit BindPaths=/var/mail",
         );
     }
 

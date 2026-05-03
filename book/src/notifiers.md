@@ -159,7 +159,7 @@ expect these canonical message shapes from the notifier path:
 | `cancelled before lock acquired on <path>; the blocking task may still write if the lock becomes available before the deadline` | Cancel fired during lock-wait; the OS thread is still blocked on `flock(LOCK_EX)`. A stray spool entry MAY appear post-cancel if the holder releases before the deadline elapses. | None — normal shutdown/reload artifact. Re-read the spool only if you suspect a duplicate run on retry. |
 | `spool lock not acquired within 5s` | Another writer held the flock past `LOCK_WAIT_DEADLINE`. backon will retry on the next supervisor cycle. | Investigate the other writer (mailx, procmail, another gcit instance) if contention persists. |
 | `discord webhook <id> cancelled; delivery status unknown — the request may or may not have reached Discord` | Cancel fired mid-HTTP. Delivery state is ambiguous. | None — normal shutdown/reload artifact. |
-| any `map_io_error` variant (e.g. `spool file <path> does not exist`, `permission denied writing to <path>`, `<path> is a symlink`, etc.) | Operator-actionable I/O failure surfaced through `NotifyError::Permanent`. | Follow the remediation embedded in the message (`useradd`/`touch`, `ReadWritePaths=`, resolve the symlink, etc.). |
+| any `map_io_error` variant (e.g. `spool file <path> does not exist`, `permission denied writing to <path>`, `<path> is a symlink`, etc.) | Operator-actionable I/O failure surfaced through `NotifyError::Permanent`. | Follow the remediation embedded in the message (`useradd`/`touch`, `BindPaths=`, resolve the symlink, etc.). |
 
 ## Run-start delivery semantics
 

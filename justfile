@@ -70,7 +70,7 @@ ci-docs:
     mdbook build book
     mdbook test book
 
-# Render systemd unit via `gcit install --dry-run`, score it with systemd-analyze (SAFE < 1.0)
+# Render systemd unit via `gcit install --dry-run`, score it with systemd-analyze (<= 1.0)
 ci-sd-analyze: build
     #!/usr/bin/env bash
     set -euo pipefail

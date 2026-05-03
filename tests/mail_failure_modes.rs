@@ -151,7 +151,7 @@ async fn eacces_returns_permanent_with_systemd_directive() {
     // `OpenOptions::new().append(true)` against a 0o444 file fails
     // with EACCES at open(2). `map_io_error` routes
     // `ErrorKind::PermissionDenied` to Permanent with a message
-    // containing the `ReadWritePaths=/var/mail` systemd directive
+    // containing the `BindPaths=/var/mail` systemd directive
     // hint, so operators see how to relax the unit's sandboxing.
     //
     // Mutation target: mapping PermissionDenied to
@@ -190,12 +190,12 @@ async fn eacces_returns_permanent_with_systemd_directive() {
     };
     let msg = source.to_string();
     // The systemd-directive remediation: when the daemon runs under
-    // a hardened unit, `ReadWritePaths=/var/mail` is the relevant
+    // a hardened unit, `BindPaths=/var/mail` is the relevant
     // sandbox knob. Pin the literal so dashboards / docs that
     // search-link operators to the directive remain accurate.
     assert!(
-        msg.contains("ReadWritePaths"),
-        "Permanent message must surface the ReadWritePaths systemd directive hint; got {msg}",
+        msg.contains("BindPaths"),
+        "Permanent message must surface the BindPaths systemd directive hint; got {msg}",
     );
     assert!(
         msg.contains(&spool_path.display().to_string()),

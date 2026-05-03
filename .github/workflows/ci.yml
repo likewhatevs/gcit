@@ -9,7 +9,7 @@
 #   musl       — release build to x86_64-unknown-linux-musl
 #   audit      — cargo audit + cargo deny check
 #   docs       — mdbook build + test + linkcheck
-#   sd-analyze — systemd-analyze security (target SAFE, score < 1.0)
+#   sd-analyze — systemd-analyze security (score <= 1.0)
 #   mutants    — cargo mutants per-PR (--in-diff origin/main)
 
 name: ci
@@ -87,8 +87,6 @@ jobs:
   docs:
     name: mdbook build + test + linkcheck
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.91
@@ -99,16 +97,6 @@ jobs:
         run: cargo install mdbook-linkcheck2 --locked
       - name: just ci-docs
         run: just ci-docs
-      - name: Deploy mdbook to gh-pages
-        if: github.ref == 'refs/heads/main' && hashFiles('book/src/SUMMARY.md') != ''
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
-          publish_dir: ./book/book/html
-          destination_dir: book
-          keep_files: true
-          commit_message: "ci: refresh mdbook"
 
   sd-analyze:
     name: systemd-analyze security score

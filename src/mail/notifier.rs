@@ -673,7 +673,7 @@ pub fn map_io_error(err: std::io::Error, path: &std::path::Path) -> NotifyError 
         },
         ErrorKind::PermissionDenied => NotifyError::Permanent {
             source: anyhow::anyhow!(
-                "permission denied writing to {}; ensure ReadWritePaths=/var/mail in the gcit unit and the daemon's user is in the mail group",
+                "permission denied writing to {}; ensure BindPaths=/var/mail in the gcit unit and the daemon's user is in the mail group",
                 path.display(),
             ),
         },

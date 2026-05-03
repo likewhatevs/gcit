@@ -1536,13 +1536,13 @@ fn validate_spool_writability_not_writable_emits_not_writable_error() {
         } => {
             field == "destination.local_mail.user"
                 && message.contains("not writable")
-                && (suggestion.contains("ReadWritePaths") || suggestion.contains("chmod 0660"))
+                && (suggestion.contains("BindPaths") || suggestion.contains("chmod 0660"))
         }
         _ => false,
     });
     assert!(
         any,
-        "expected NotWritable error with chmod/ReadWritePaths suggestion; got: {:#?}",
+        "expected NotWritable error with chmod/BindPaths suggestion; got: {:#?}",
         errors,
     );
 }

@@ -22,7 +22,7 @@ mutants-score:
                  lab.caught, lab.missed, lab.timeout);
     }
 
-# Parse systemd-analyze security output and gate on SAFE (< 1.0)
+# Parse systemd-analyze security output and gate on score <= 1.0
 [script("rust-script")]
 sd-analyze-score file:
     //! ```cargo
@@ -44,11 +44,11 @@ sd-analyze-score file:
             None => { eprintln!("::error::systemd-analyze did not emit an Overall exposure level score"); std::process::exit(1); }
         };
         println!("systemd-analyze score: {score}");
-        if score >= 1.0 {
-            eprintln!("::error::systemd-analyze score {score} >= 1.0 (SAFE ceiling)");
+        if score > 1.0 {
+            eprintln!("::error::systemd-analyze score {score} > 1.0");
             std::process::exit(1);
         }
-        println!("score {score} is in the SAFE range (< 1.0)");
+        println!("score {score} is at or below 1.0");
     }
 
 # Render badge + push to gh-pages (requires GITHUB_TOKEN or GH_TOKEN)

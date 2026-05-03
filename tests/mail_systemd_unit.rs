@@ -5,7 +5,7 @@
 // swap on whether any flow has a `local_mail` destination. The other
 // hardening directives are emitted byte-for-byte regardless of form,
 // so `systemd-analyze security gcit.service` reports identical
-// hardening in either branch. ReadWritePaths=/var/mail is gated on
+// hardening in either branch. BindPaths=/var/mail is gated on
 // `has_local_mail`: emitted only when at least one flow's destination
 // is local_mail. Discord-only installs do not punch a writable path
 // through ProtectSystem=strict for /var/mail because the local_mail
@@ -124,7 +124,7 @@ fn unit_with_local_mail_uses_user_gcit_group_mail() {
 
 #[test]
 fn unit_gates_read_write_paths_var_mail_on_local_mail_present() {
-    // ReadWritePaths=/var/mail is gated on has_local_mail. A Discord-
+    // BindPaths=/var/mail is gated on has_local_mail. A Discord-
     // only install never writes to /var/mail; emitting the line would
     // punch a needless writable path through ProtectSystem=strict.
     // The local_mail variant must include it because the local_mail
@@ -137,12 +137,12 @@ fn unit_gates_read_write_paths_var_mail_on_local_mail_present() {
     let unit_no = render_unit(CFG_NO_LOCAL_MAIL);
     let unit_yes = render_unit(CFG_WITH_LOCAL_MAIL);
     assert!(
-        !unit_no.contains("ReadWritePaths=/var/mail"),
-        "no-local-mail unit must NOT include ReadWritePaths=/var/mail; unit:\n{unit_no}",
+        !unit_no.contains("BindPaths=/var/mail"),
+        "no-local-mail unit must NOT include BindPaths=/var/mail; unit:\n{unit_no}",
     );
     assert!(
-        unit_yes.contains("ReadWritePaths=/var/mail"),
-        "local-mail unit must include ReadWritePaths=/var/mail; unit:\n{unit_yes}",
+        unit_yes.contains("BindPaths=/var/mail"),
+        "local-mail unit must include BindPaths=/var/mail; unit:\n{unit_yes}",
     );
 }
 
