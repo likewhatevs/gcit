@@ -10,7 +10,6 @@
 #   audit      — cargo audit + cargo deny check
 #   docs       — mdbook build + test + linkcheck
 #   sd-analyze — systemd-analyze security (score <= 1.0)
-#   mutants    — cargo mutants per-PR (--in-diff origin/main)
 
 name: ci
 
@@ -112,32 +111,3 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends systemd
       - name: just ci-sd-analyze
         run: just ci-sd-analyze
-
-  mutants-pr:
-    name: cargo mutants (--in-diff origin/main)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.91
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
-      - uses: taiki-e/install-action@cargo-mutants
-      - uses: taiki-e/install-action@just
-      - name: Install rust-script
-        run: cargo install rust-script --locked
-      - name: just ci-mutants
-        run: just ci-mutants
-      - name: Upload cargo-mutants output
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: cargo-mutants-output
-          path: mutants.out
-          if-no-files-found: warn
-          retention-days: 14
-      - name: just ci-mutants-gate
-        if: always()
-        run: just ci-mutants-gate

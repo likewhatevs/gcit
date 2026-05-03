@@ -2,3 +2,4 @@
 mutants.out/
 mutants.out.old/
 book/book/
+lcov.info

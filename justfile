@@ -42,13 +42,13 @@ ci-fmt:
 ci-clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Test + coverage with 90% line gate
+# Test + coverage with 90% region gate (lcov output gitignored)
 ci-coverage:
     cargo llvm-cov nextest \
         --workspace \
         --lcov \
         --output-path lcov.info \
-        --fail-under-lines 90
+        --fail-under-regions 90
 
 # Musl static build + link assertion
 ci-musl:

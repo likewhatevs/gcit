@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config (`$XDG_CONFIG_HOME/gcit/config.toml`) under non-root euids;
   the system bottom default `/etc/gcit/config.toml` is used only
   under root or for `--system` install/uninstall. Documented in the
-  book's [Configuration reference](https://likewhatevs.github.io/gcit/book/configuration.html#default-config-path)
+  book's [Configuration reference](https://likewhatevs.github.io/gcit/configuration.html#default-config-path)
   and on the `--config` doc comment.
 - CI per-PR `cargo mutants` job now uploads `mutants.out/` as a
   `cargo-mutants-output` artifact (14-day retention) so reviewers can
@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `discord`, `local_mail`), `id` (the destination id from config),
   and `label` (`run-start`, `run-complete`, `job-complete`); per-job
   records additionally carry `job_id`. See the book's
-  [Troubleshooting — Logging](https://likewhatevs.github.io/gcit/book/troubleshooting.html#logging)
+  [Troubleshooting — Logging](https://likewhatevs.github.io/gcit/troubleshooting.html#logging)
   for the full target hierarchy.
 - `gcit status` text output now prefixes daemon-level synthetic keys
   (e.g. `(reload)`, recorded by the supervisor when SIGHUP-driven
@@ -63,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parens-wrapping is the namespace, and `flow.name` validation
   (`[a-zA-Z0-9_-]+`) guarantees no real flow can collide with the
   convention.
-- Documented in the book's [Notifiers — Run-start delivery semantics](https://likewhatevs.github.io/gcit/book/notifiers.html#run-start-delivery-semantics):
+- Documented in the book's [Notifiers — Run-start delivery semantics](https://likewhatevs.github.io/gcit/notifiers.html#run-start-delivery-semantics):
   `on_run_start` notifier fan-out tasks are spawned without waiting
   for completion (so a slow notifier cannot delay monitor spawn) and
   may be cut off mid-send by tokio runtime teardown when the daemon

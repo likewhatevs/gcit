@@ -1,24 +1,27 @@
 #!/bin/sh
-set -e
-#
-# To enable locally:
-#   git config core.hooksPath .githooks
 
-if ! command -v cargo >/dev/null 2>&1; then
-    echo "Warning: cargo not found, skipping pre-commit checks"
-    exit 0
+if command -v cargo >/dev/null 2>&1; then
+    echo "Running cargo fmt..."
+    cargo fmt --all
+
+    echo "Running cargo clippy..."
+    cargo clippy --workspace --all-targets -- -D warnings
+    if [ $? -ne 0 ]; then
+        echo "clippy failed, aborting commit"
+        exit 1
+    fi
+
+    echo "Running cargo build --tests..."
+    if ! cargo build --tests --quiet; then
+        echo "test build failed, aborting commit"
+        exit 1
+    fi
+else
+    echo "Warning: cargo not found, skipping fmt, clippy, and test build"
 fi
 
-echo "Running cargo fmt --check..."
-if ! cargo fmt --all -- --check; then
-    echo "fmt check failed — run 'cargo fmt --all' and re-stage"
-    exit 1
-fi
-
-echo "Running cargo clippy..."
-if ! cargo clippy --workspace --all-targets -- -D warnings; then
-    echo "clippy failed, aborting commit"
-    exit 1
-fi
+# Re-add only files that were already staged, in case cargo fmt
+# reformatted them.
+git diff --cached --name-only --diff-filter=ACM | xargs -r git add
 
 exit 0
