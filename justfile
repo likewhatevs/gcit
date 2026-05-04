@@ -32,6 +32,16 @@ check config="config.toml":
 build:
     cargo build
 
+musl-target := arch() + "-unknown-linux-musl"
+
+# Static musl release build for the host architecture
+build-musl target=musl-target: (install-musl target)
+    cargo build --release --target {{target}}
+
+# Add musl target via rustup
+install-musl target=musl-target:
+    rustup target add {{target}}
+
 # --- CI recipes (called by .github/workflows/ci.yml) ---
 
 # Format check
