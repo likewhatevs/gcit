@@ -50,7 +50,7 @@
 // without a real disk fault.
 
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -442,58 +442,52 @@ impl Notifier for LocalMailNotifier {
         match phase_outcome {
             Ok(Ok(())) => {
                 // Lock acquired. Wait for write+sync unbounded.
-                match blocking.await {
-                    Ok(Ok(())) => Ok(NotifyOutcome::Sent {
+                let result = blocking.await;
+                if matches!(&result, Ok(Ok(()))) {
+                    Ok(NotifyOutcome::Sent {
                         receipt: format!("file:{}", spool_path.display()),
-                    }),
-                    Ok(Err(WriteError::Io(e))) => Err(map_io_error(e, &spool_path)),
-                    // LockTimeout cannot reach the post-acquire
-                    // arm: the helper only returns it when the
-                    // open or try_write fails before the signal.
-                    Ok(Err(WriteError::LockTimeout)) => Err(NotifyError::Transient {
-                        source: anyhow::anyhow!(
-                            "spool lock not acquired within {:?}",
-                            LOCK_WAIT_DEADLINE,
-                        ),
-                        retry_after: None,
-                    }),
-                    Err(join_err) => Err(NotifyError::Transient {
-                        source: anyhow::anyhow!("blocking task join failed: {join_err}"),
-                        retry_after: None,
-                    }),
+                    })
+                } else {
+                    Err(classify_blocking_failure(&spool_path, result))
                 }
             }
             Ok(Err(_dropped)) => {
-                // phase_tx dropped without sending — the blocking
-                // task errored before the lock was acquired (e.g.
-                // open(2) failed). Await the join to surface the
-                // underlying io::Error.
-                match blocking.await {
-                    Ok(Err(WriteError::Io(e))) => Err(map_io_error(e, &spool_path)),
-                    Ok(Err(WriteError::LockTimeout)) => Err(NotifyError::Transient {
-                        source: anyhow::anyhow!(
-                            "spool lock not acquired within {:?}",
-                            LOCK_WAIT_DEADLINE,
-                        ),
-                        retry_after: None,
-                    }),
-                    Ok(Ok(())) => Err(NotifyError::Transient {
-                        source: anyhow::anyhow!(
-                            "blocking task signaled phase-error but reported success",
-                        ),
-                        retry_after: None,
-                    }),
-                    Err(join_err) => Err(NotifyError::Transient {
-                        source: anyhow::anyhow!("blocking task join failed: {join_err}"),
-                        retry_after: None,
-                    }),
-                }
+                // phase_tx dropped — the blocking task errored before
+                // lock acquisition (e.g. open(2) failed). Await join
+                // to surface the underlying io::Error.
+                Err(classify_blocking_failure(&spool_path, blocking.await))
             }
             Err(_elapsed) => Err(NotifyError::Transient {
                 source: anyhow::anyhow!("spool lock not acquired within {:?}", LOCK_WAIT_DEADLINE,),
                 retry_after: None,
             }),
         }
+    }
+}
+
+/// Map a `blocking.await` result to a `NotifyError`. Shared between
+/// the post-acquire (Ok(Ok(())) phase) and pre-acquire-failed
+/// (Ok(Err(_)) phase) arms — both surface the same four failure
+/// shapes (Io, LockTimeout, JoinErr, plus the inconsistency case
+/// where the helper reports success after signaling phase-error).
+fn classify_blocking_failure(
+    spool_path: &Path,
+    result: Result<Result<(), WriteError>, tokio::task::JoinError>,
+) -> NotifyError {
+    match result {
+        Ok(Err(WriteError::Io(e))) => map_io_error(e, spool_path),
+        Ok(Err(WriteError::LockTimeout)) => NotifyError::Transient {
+            source: anyhow::anyhow!("spool lock not acquired within {:?}", LOCK_WAIT_DEADLINE),
+            retry_after: None,
+        },
+        Ok(Ok(())) => NotifyError::Transient {
+            source: anyhow::anyhow!("blocking task signaled phase-error but reported success"),
+            retry_after: None,
+        },
+        Err(join_err) => NotifyError::Transient {
+            source: anyhow::anyhow!("blocking task join failed: {join_err}"),
+            retry_after: None,
+        },
     }
 }
 

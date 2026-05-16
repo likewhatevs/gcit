@@ -416,18 +416,7 @@ pub(super) async fn spawn_flow(
         ))
         .catch_unwind()
         .await;
-        match result {
-            Ok(()) => FlowExit {
-                flow: poll_flow,
-                role: FlowRole::Poll,
-                panic: None,
-            },
-            Err(payload) => FlowExit {
-                flow: poll_flow,
-                role: FlowRole::Poll,
-                panic: Some(panic_payload_to_string(payload)),
-            },
-        }
+        flow_exit_from_result(result, poll_flow, FlowRole::Poll)
     });
 
     // Spawn dispatcher task with the same catch_unwind wrapping.
@@ -459,18 +448,7 @@ pub(super) async fn spawn_flow(
         ))
         .catch_unwind()
         .await;
-        match result {
-            Ok(()) => FlowExit {
-                flow: dispatcher_flow,
-                role: FlowRole::Dispatcher,
-                panic: None,
-            },
-            Err(payload) => FlowExit {
-                flow: dispatcher_flow,
-                role: FlowRole::Dispatcher,
-                panic: Some(panic_payload_to_string(payload)),
-            },
-        }
+        flow_exit_from_result(result, dispatcher_flow, FlowRole::Dispatcher)
     });
 
     registry.handles.insert(
@@ -503,6 +481,28 @@ fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
         s.clone()
     } else {
         "(panic payload not stringifiable)".to_string()
+    }
+}
+
+/// Build a `FlowExit` from a `catch_unwind` result. Centralizes the
+/// Ok→panic:None / Err→panic:Some(stringified) mapping shared by the
+/// poll and dispatcher spawn arms.
+fn flow_exit_from_result(
+    result: Result<(), Box<dyn std::any::Any + Send>>,
+    flow: String,
+    role: FlowRole,
+) -> FlowExit {
+    match result {
+        Ok(()) => FlowExit {
+            flow,
+            role,
+            panic: None,
+        },
+        Err(payload) => FlowExit {
+            flow,
+            role,
+            panic: Some(panic_payload_to_string(payload)),
+        },
     }
 }
 

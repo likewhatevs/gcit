@@ -49,20 +49,35 @@ pub(super) struct ControlHandler {
     pub(super) flow_names: Arc<RwLock<Vec<String>>>,
 }
 
-impl control::Handler for ControlHandler {
-    async fn trigger(&self, flow: &str, dry_run: bool) -> Result<serde_json::Value, String> {
+impl ControlHandler {
+    /// Send a command to the supervisor and await its reply. Centralizes
+    /// the `cmd_tx.send + reply_rx.await + map_err` triple shared by
+    /// `trigger` and `reload` — both differ only in the variant they
+    /// construct, so the caller passes a builder closure that takes
+    /// the reply sender and returns the variant.
+    async fn dispatch_cmd<F>(&self, build: F) -> Result<serde_json::Value, String>
+    where
+        F: FnOnce(oneshot::Sender<Result<serde_json::Value, String>>) -> ControlCommand,
+    {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.cmd_tx
-            .send(ControlCommand::Trigger {
-                flow: flow.to_string(),
-                dry_run,
-                reply: reply_tx,
-            })
+            .send(build(reply_tx))
             .await
             .map_err(|_| "supervisor command channel closed".to_string())?;
         reply_rx
             .await
             .map_err(|_| "supervisor reply dropped".to_string())?
+    }
+}
+
+impl control::Handler for ControlHandler {
+    async fn trigger(&self, flow: &str, dry_run: bool) -> Result<serde_json::Value, String> {
+        self.dispatch_cmd(|reply| ControlCommand::Trigger {
+            flow: flow.to_string(),
+            dry_run,
+            reply,
+        })
+        .await
     }
 
     async fn status(&self, flow: Option<&str>) -> Result<serde_json::Value, String> {
@@ -87,21 +102,9 @@ impl control::Handler for ControlHandler {
                 .and_then(|s| s.last_sha.as_deref())
                 .map(serde_json::Value::from)
                 .unwrap_or(serde_json::Value::Null);
-            let last_poll_at = st
-                .and_then(|s| s.last_poll_at)
-                .map(|t| t.to_rfc3339())
-                .map(serde_json::Value::from)
-                .unwrap_or(serde_json::Value::Null);
-            let last_dispatched_at = st
-                .and_then(|s| s.last_dispatched_at)
-                .map(|t| t.to_rfc3339())
-                .map(serde_json::Value::from)
-                .unwrap_or(serde_json::Value::Null);
-            let cooldown_until = st
-                .and_then(|s| s.cooldown_until)
-                .map(|t| t.to_rfc3339())
-                .map(serde_json::Value::from)
-                .unwrap_or(serde_json::Value::Null);
+            let last_poll_at = opt_rfc3339(st.and_then(|s| s.last_poll_at));
+            let last_dispatched_at = opt_rfc3339(st.and_then(|s| s.last_dispatched_at));
+            let cooldown_until = opt_rfc3339(st.and_then(|s| s.cooldown_until));
             let active_runs = st.map(|s| s.active_runs.len()).unwrap_or(0);
             let notified_runs = st.map(|s| s.notified_runs.len()).unwrap_or(0);
             // `state` field: a coarse human label so cli/status.rs's
@@ -175,14 +178,8 @@ impl control::Handler for ControlHandler {
     }
 
     async fn reload(&self) -> Result<serde_json::Value, String> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.cmd_tx
-            .send(ControlCommand::Reload { reply: reply_tx })
+        self.dispatch_cmd(|reply| ControlCommand::Reload { reply })
             .await
-            .map_err(|_| "supervisor command channel closed".to_string())?;
-        reply_rx
-            .await
-            .map_err(|_| "supervisor reply dropped".to_string())?
     }
 
     async fn version(&self) -> Result<serde_json::Value, String> {
@@ -358,6 +355,16 @@ fn render_dry_run_payload(flow: &FlowConfig) -> Result<serde_json::Value, String
 
 /// Read the most recent observed sha for `flow` from the state
 /// mirror. Returns an error message naming the flow if no
+/// Map an `Option<DateTime<Utc>>` to JSON: `None` → `Value::Null`,
+/// `Some(t)` → `Value::String(rfc3339)`. Centralizes the chain
+/// repeated for `last_poll_at`, `last_dispatched_at`, and
+/// `cooldown_until` in the status renderer.
+fn opt_rfc3339(t: Option<chrono::DateTime<chrono::Utc>>) -> serde_json::Value {
+    t.map(|t| t.to_rfc3339())
+        .map(serde_json::Value::from)
+        .unwrap_or(serde_json::Value::Null)
+}
+
 /// observation has ever landed: a manual trigger requires an
 /// observed SHA so the dispatcher's correlator can populate its
 /// head_sha filter.
