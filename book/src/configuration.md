@@ -53,7 +53,7 @@ Cooldown bounds dispatch frequency. After a trigger acceptance, subsequent SHA-d
 
 | field | type | notes |
 |---|---|---|
-| `filter` | string (`tracing_subscriber::EnvFilter` syntax) | parsed but **not currently wired into log init**. Use the `--log-filter` CLI flag for now. The built-in default is `info,gcit=debug`. |
+| `filter` | string (`tracing_subscriber::EnvFilter` syntax) | applies to subcommands that load the config (`run`, `check`, `install`). Precedence: `--log-filter` CLI flag > this field > built-in default `info,gcit=debug`. The control-channel subcommands (`reload`, `status`, `trigger`) read no config and use the CLI flag or the default. |
 
 ## `[http]`
 

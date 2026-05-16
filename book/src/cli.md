@@ -9,7 +9,7 @@ gcit [OPTIONS] <SUBCOMMAND>
 | flag | purpose |
 |---|---|
 | `--config <PATH>` | path to the config file (see [Configuration reference](./configuration.md#default-config-path) for default-resolution rules) |
-| `--log-filter <FILTER>` | tracing filter per `tracing_subscriber::EnvFilter` syntax. Default `info,gcit=debug`. The CLI flag is the only operative source — the config-file `[log] filter` field is parsed but not currently wired into log init, and gcit does not honour any `RUST_LOG`-style env var. |
+| `--log-filter <FILTER>` | tracing filter per `tracing_subscriber::EnvFilter` syntax. Precedence: CLI flag > config-file `[log] filter` > built-in default `info,gcit=debug`. The config-file fallback only applies to subcommands that load the config (`run`, `check`, `install`); control-channel subcommands (`reload`, `status`, `trigger`) read no config and use this flag or the default. gcit does not honour any `RUST_LOG`-style env var. |
 | `--control-socket <PATH>` | path to the daemon's Unix control socket. Default: `$XDG_RUNTIME_DIR/gcit/control.sock` (when set) or `/run/gcit/control.sock`. |
 | `--version` | print version + git SHA and exit |
 | `--help` | print help and exit |

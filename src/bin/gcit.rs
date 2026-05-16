@@ -62,12 +62,14 @@ struct Cli {
     #[arg(long, global = true, default_value = "/etc/gcit/config.toml")]
     config: PathBuf,
 
-    /// Tracing filter (per `tracing_subscriber::EnvFilter`). The CLI
-    /// flag is the only operative source: the config-file
-    /// `[log] filter` field is parsed but not currently wired into
-    /// log init, and gcit does not honour any `RUST_LOG`-style env
-    /// var. When unset, gcit uses its built-in default
-    /// (`info,gcit=debug`).
+    /// Tracing filter (per `tracing_subscriber::EnvFilter`).
+    /// Precedence: this CLI flag > config-file `[log] filter` > the
+    /// built-in default `info,gcit=debug`. The config-file fallback
+    /// only applies to subcommands that load the config (`run`,
+    /// `check`, `install`); the control-channel subcommands
+    /// (`reload`, `status`, `trigger`) do not read the config and
+    /// must use this flag if a non-default filter is needed. gcit
+    /// does not honour any `RUST_LOG`-style env var.
     #[arg(long, global = true)]
     log_filter: Option<String>,
 
@@ -418,6 +420,21 @@ fn init_log_or_fail(log_filter: Option<&str>, foreground: bool) -> Result<(), Ex
     Ok(())
 }
 
+/// Resolve the effective tracing filter for a config-consuming
+/// subcommand. Precedence: CLI flag > `[log] filter` from the config
+/// file > built-in default (handled by `gcit::log::init`). Delegates
+/// the config peek to `gcit::log::peek_filter_from_config`, which
+/// returns `None` on any read or parse failure so the actual config
+/// load — which runs after log init in `cli::check` / `cli::install`
+/// / `flow::run_daemon` — surfaces the parse error with the default
+/// filter applied to the error event.
+fn resolve_log_filter(cli_flag: Option<&str>, config_path: &Path) -> Option<String> {
+    if let Some(flag) = cli_flag {
+        return Some(flag.to_string());
+    }
+    gcit::log::peek_filter_from_config(config_path)
+}
+
 async fn route_run(
     args: RunArgs,
     config_path: PathBuf,
@@ -425,7 +442,8 @@ async fn route_run(
     listen_fds: Vec<(RawFd, String)>,
     log_filter: Option<&str>,
 ) -> ExitCode {
-    if let Err(code) = init_log_or_fail(log_filter, args.foreground) {
+    let resolved = resolve_log_filter(log_filter, &config_path);
+    if let Err(code) = init_log_or_fail(resolved.as_deref(), args.foreground) {
         return code;
     }
     let control_socket = resolve_socket(control_socket);
@@ -444,14 +462,16 @@ async fn route_run(
 }
 
 fn route_check(config_path: &Path, log_filter: Option<&str>) -> ExitCode {
-    if let Err(code) = init_log_or_fail(log_filter, true) {
+    let resolved = resolve_log_filter(log_filter, config_path);
+    if let Err(code) = init_log_or_fail(resolved.as_deref(), true) {
         return code;
     }
     cli::check::run(config_path)
 }
 
 async fn route_install(a: InstallArgs, config_path: &Path, log_filter: Option<&str>) -> ExitCode {
-    if let Err(code) = init_log_or_fail(log_filter, true) {
+    let resolved = resolve_log_filter(log_filter, config_path);
+    if let Err(code) = init_log_or_fail(resolved.as_deref(), true) {
         return code;
     }
     let scope = pick_scope(a.user, a.system);
