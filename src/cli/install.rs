@@ -832,21 +832,45 @@ fn ensure_static_user(name: &str) -> io::Result<bool> {
         }
         Err(e) => return Err(e),
     };
-    if output.status.success() {
+    let created = classify_useradd_exit(
+        output.status.success(),
+        output.status.code(),
+        &output.stderr,
+    )?;
+    if created {
         println!("  created.");
+    } else {
+        println!("  already exists; not modified.");
+    }
+    Ok(created)
+}
+
+/// Classify a `useradd` outcome into the install manifest's
+/// `user_created_by_install` field. Extracted from `ensure_static_user`
+/// as a test seam so the three-way classification (created / already
+/// exists / fatal) can be pinned without spawning useradd. Exit 0 →
+/// Ok(true) (we just minted the account). Exit 9 (E_NAME_IN_USE per
+/// the useradd man page) → Ok(false) (account pre-existed; uninstall
+/// must NOT later userdel). Anything else → Err with the stderr text
+/// attached so the operator sees what useradd actually said.
+///
+/// `#[doc(hidden)] pub` mirrors the test-seam pattern at
+/// `gcit::mail::map_io_error` and `gcit::git::grokmirror::check_content_length_cap`.
+#[doc(hidden)]
+pub fn classify_useradd_exit(
+    success: bool,
+    exit_code: Option<i32>,
+    stderr: &[u8],
+) -> io::Result<bool> {
+    if success {
         return Ok(true);
     }
-    // useradd's man page documents exit 9 = E_NAME_IN_USE. The user
-    // already exists; nothing to do, and uninstall must NOT later
-    // userdel because we did not create the account.
-    if output.status.code() == Some(9) {
-        println!("  already exists; not modified.");
+    if exit_code == Some(9) {
         return Ok(false);
     }
     Err(io::Error::other(format!(
-        "useradd exited with status {:?}: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim(),
+        "useradd exited with status {exit_code:?}: {}",
+        String::from_utf8_lossy(stderr).trim(),
     )))
 }
 
@@ -1168,6 +1192,57 @@ mod tests {
         let created = ensure_static_user_if_local_mail(false, InstallScope::System)
             .expect("no-local_mail branch must not error");
         assert!(!created, "no local_mail must mean 'nothing created'");
+    }
+
+    #[test]
+    fn classify_useradd_exit_zero_returns_true() {
+        // Exit 0 = useradd created the account. Manifest must
+        // record user_created_by_install=true so uninstall later
+        // calls userdel.
+        let created = classify_useradd_exit(true, Some(0), b"").expect("exit 0 must accept");
+        assert!(created, "exit 0 must surface as 'we just minted it'");
+    }
+
+    #[test]
+    fn classify_useradd_exit_nine_means_account_already_exists() {
+        // Exit 9 = E_NAME_IN_USE per the useradd man page. Manifest
+        // must record user_created_by_install=false so uninstall
+        // does NOT remove an account it did not create.
+        let created =
+            classify_useradd_exit(false, Some(9), b"useradd: user 'gcit' already exists\n")
+                .expect("exit 9 must accept (pre-existing user is not a failure)");
+        assert!(!created, "exit 9 must surface as 'account pre-existed'");
+    }
+
+    #[test]
+    fn classify_useradd_exit_other_returns_err_with_stderr() {
+        // Any other exit code is fatal. The error message must carry
+        // useradd's stderr so the operator sees what failed (a
+        // missing 'mail' group, a uid conflict, etc.).
+        let err = classify_useradd_exit(false, Some(4), b"useradd: UID 999 is not unique\n")
+            .expect_err("non-zero non-9 exit must surface as Err");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("UID 999 is not unique"),
+            "Err must carry the stderr text verbatim; got: {msg}",
+        );
+        assert!(
+            msg.contains("4"),
+            "Err must carry the exit code; got: {msg}",
+        );
+    }
+
+    #[test]
+    fn classify_useradd_exit_signal_kill_returns_err() {
+        // Process killed by signal: exit_code is None and success is
+        // false. Must surface as Err — a signal is not a graceful
+        // "user already exists" outcome.
+        let err =
+            classify_useradd_exit(false, None, b"").expect_err("signal-kill must surface as Err");
+        assert!(
+            err.to_string().contains("None"),
+            "signal-kill Err must surface the None exit code in its message",
+        );
     }
 
     #[test]

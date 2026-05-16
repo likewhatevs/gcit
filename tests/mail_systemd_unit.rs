@@ -285,36 +285,26 @@ fn unit_systemd_analyze_score_below_three() {
     );
 }
 
-#[tokio::test]
-#[ignore = "needs install-flow command-runner test seam: gcit install currently calls useradd via std::process::Command; \
-            tests can't intercept without a Runner trait or process harness"]
-async fn install_creates_gcit_user_when_local_mail_present() {
-    // gcit install with a local_mail destination must invoke
-    // `useradd --system --no-create-home --shell /usr/sbin/nologin
-    // -G mail gcit` and record the operation in the install
-    // manifest. Activation requires a command-runner test seam.
-}
-
-#[tokio::test]
-#[ignore = "needs install-flow command-runner test seam"]
-async fn install_skips_useradd_when_no_local_mail() {
-    // No local_mail destinations must skip the useradd call
-    // entirely — pollutes /etc/passwd otherwise.
-}
-
-#[tokio::test]
-#[ignore = "needs install-flow command-runner test seam"]
-async fn install_skips_useradd_when_gcit_user_already_exists() {
-    // Pre-existing gcit user: install must check getpwnam first
-    // and skip the call (rather than letting useradd fail with
-    // EEXIST). Manifest records the skip so uninstall does not
-    // remove a user it did not create.
-}
-
-#[tokio::test]
-#[ignore = "needs uninstall-flow command-runner test seam + manifest fixture"]
-async fn uninstall_removes_gcit_user_only_if_install_created_it() {
-    // Manifest-driven cleanup: gcit uninstall calls userdel only
-    // when the manifest records a previous useradd. A pre-existing
-    // gcit user must survive uninstall.
-}
+// install / uninstall lifecycle coverage for the useradd / userdel
+// shell-out:
+//
+//   * The GATING logic (when ensure_static_user_if_local_mail
+//     short-circuits without calling useradd) is pinned by the unit
+//     tests in src/cli/install.rs::tests for both
+//     (has_local_mail=false, _) and (has_local_mail=true, scope=User).
+//
+//   * The post-Command CLASSIFICATION (exit 0 → created, exit 9 =
+//     E_NAME_IN_USE → already-existed, any other → fatal with stderr)
+//     is pinned by `classify_useradd_exit` unit tests in the same
+//     module. The Command-spawn step itself is `std::process::Command`
+//     — trusted std-lib behaviour, not under test.
+//
+//   * Manifest-driven userdel-on-uninstall reads
+//     `manifest.user_created_by_install`; the Manifest round-trip is
+//     pinned by src/cli/install.rs::tests::manifest_user_created_round_trips.
+//
+// Driving the spawn path end-to-end under cargo nextest would require
+// either root (to actually call useradd against /etc/passwd) or a
+// chroot/PATH-redirect harness that doesn't exist. The journey/ shell
+// scripts under qemu cover that integration; the Rust test suite pins
+// every piece of logic gcit owns.
