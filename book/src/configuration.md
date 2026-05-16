@@ -207,14 +207,11 @@ additionally have access to:
 | `{{job.attempt}}` | run_attempt counter |
 
 `{{job.*}}` is **not** available on `title`, `description`, or
-`collapsed_summary` templates — they render once per run, not per job.
-
-> **Known limitation:** the config validator's probe context does not yet
-> include a `job` namespace, so `gcit check` and `gcit validate-template`
-> currently reject `{{job.*}}` references in **all** templates (not just the
-> run-scoped ones). At runtime, per-job keys render correctly inside
-> `field_name` and `field_value`. A future release will add `job` stubs to
-> the probe context so templates using `{{job.*}}` pass validation.
+`collapsed_summary` templates — they render once per run, not per job. The
+config validator's probe context supplies stubs for every documented
+`job` key so `gcit check` and `gcit validate-template` accept templates
+that reference `{{job.*}}` in `field_name` or `field_value`. The notification
+path supplies the real per-job data when iterating.
 
 ### Strict-mode pitfalls
 

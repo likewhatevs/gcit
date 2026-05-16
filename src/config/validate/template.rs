@@ -16,7 +16,15 @@ use super::{span_line, validate_err};
 /// Single-name expressions outside this set (`{{gcit_run_id}}`) are
 /// also rejected — the template variable contract requires the
 /// `namespace.field` form.
-const TEMPLATE_NAMESPACES: &[&str] = &["flow", "source", "action", "run", "gcit"];
+///
+/// `job` is documented as per-job context that only renders inside
+/// the Discord embed `field_name` / `field_value` templates (which
+/// iterate the run's jobs). The probe context supplies a stub job
+/// object so `{{job.id}}`, `{{job.name}}`, `{{job.url}}`,
+/// `{{job.conclusion}}`, `{{job.attempt}}` all validate cleanly via
+/// `gcit check` / `gcit validate-template`. At runtime the
+/// notification path supplies the real per-job data when iterating.
+const TEMPLATE_NAMESPACES: &[&str] = &["flow", "source", "action", "run", "job", "gcit"];
 
 /// Compile a single template field and verify it renders against a
 /// probe context that supplies every documented namespaced variable.
@@ -171,6 +179,18 @@ pub fn probe_context() -> serde_json::Value {
         "run": {
             "status": "completed",
             "conclusion": "success",
+        },
+        // Per-job stub. Matches the per-iteration shape the
+        // notification path supplies inside Discord embed
+        // field_name / field_value templates (the only sites that
+        // can use `{{job.*}}`). Keys are documented in
+        // book/src/configuration.md under the per-job table.
+        "job": {
+            "id": 9876543210u64,
+            "name": "build-and-test",
+            "url": "https://github.com/myorg/linux-builder/actions/runs/1234567890/job/9876543210",
+            "conclusion": "success",
+            "attempt": 1u32,
         },
         "gcit": {
             "run_id": "00000000-0000-0000-0000-000000000000",

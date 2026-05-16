@@ -79,10 +79,19 @@ pub enum LsRemoteError {
 
 /// Poll the remote at `url` for the SHA of `ref_name`.
 ///
-/// Anonymous-only: the auth callback always returns `Ok(None)`.
-/// Private-HTTPS and SSH-with-credential paths are not yet
-/// implemented. gcit's primary v1 use case (kernel + Linux mirrors +
-/// public Discord workflows) is covered by anonymous polls.
+/// Anonymous-only by design. The auth callback always returns
+/// `Ok(None)`. gcit's threat model assumes a GitHub PAT is already
+/// available for the dispatch side of every flow; private polling
+/// against github.com is handled by the `github_api` strategy
+/// (auto-detected from the URL host), which uses the PAT and
+/// participates in GitHub's per-token rate-limit budget.
+/// The `ls_remote` strategy is the fallback for other hosts where
+/// public mirrors are the expected use case (kernel.org, sourcehut,
+/// public gitlab instances). Operators with a private non-github
+/// mirror that requires credentials should expose the mirror's read
+/// surface as public-by-IP or front it with a public-read proxy;
+/// gcit will not embed long-lived ssh keys or HTTP credentials into
+/// its credential store for ls_remote.
 ///
 /// Wraps the blocking gix-protocol pipeline in `spawn_blocking` so
 /// the call returns control to the runtime while the network round
