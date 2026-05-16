@@ -21,13 +21,22 @@ use serde::Serialize;
 ///   1. Create a tempfile in `dest`'s parent directory (so the final
 ///      rename is on the same filesystem and POSIX-atomic).
 ///   2. Write all bytes.
-///   3. Set the requested file mode.
+///   3. Set the requested file mode on the tempfile.
 ///   4. `sync_all()` the data and metadata to the underlying device
 ///      BEFORE the rename — `tempfile::NamedTempFile::persist` does
 ///      not fsync, and a power loss between the unfsynced data and
 ///      the rename leaves an empty file at the destination.
 ///   5. Persist (atomic rename) to `dest`.
-///   6. Open + `sync_all()` the parent directory so the rename's
+///   6. Reassert the file mode on the destination path. On ext4/xfs/
+///      tmpfs the pre-rename chmod is preserved across the rename, so
+///      this is a no-op. On FUSE layers or remote filesystems where
+///      the mode can be mangled by the rename (the open file
+///      description's mode and the directory-entry mode are tracked
+///      separately on some implementations), this is the
+///      authoritative step. Propagates as `io::Error` so an operator
+///      whose filesystem cannot honour POSIX `chmod` sees a hard
+///      failure rather than a silently-misowned state file.
+///   7. Open + `sync_all()` the parent directory so the rename's
 ///      directory entry is durable across crash. Without this step,
 ///      a crash between rename and the next directory-entry flush
 ///      can resurrect the prior file (or no file at all on first
@@ -50,6 +59,7 @@ pub fn atomic_write(dest: &Path, contents: &[u8], mode: u32) -> io::Result<()> {
         .set_permissions(fs::Permissions::from_mode(mode))?;
     tf.as_file_mut().sync_all()?;
     tf.persist(dest).map_err(|e| e.error)?;
+    fs::set_permissions(dest, fs::Permissions::from_mode(mode))?;
     let dir = fs::File::open(&parent)?;
     dir.sync_all()?;
     Ok(())
@@ -217,6 +227,31 @@ mod tests {
         );
         assert!(td.path().join("bare.txt").exists());
         restored.expect("restore cwd");
+    }
+
+    #[test]
+    fn atomic_write_overwrites_existing_files_mode() {
+        // Pin: when `dest` already exists with a different mode, the
+        // post-rename `set_permissions` step enforces the requested
+        // mode authoritatively. A mutation that drops the post-rename
+        // chmod surfaces here only on filesystems where the rename
+        // would carry the old mode through (rare, but possible on
+        // some FUSE layers). On ext4/tmpfs this also pins that the
+        // overwrite path matches the requested mode end-to-end.
+        let td = tempfile::tempdir().unwrap();
+        let dest = td.path().join("mode.txt");
+        atomic_write(&dest, b"first", 0o644).unwrap();
+        assert_eq!(
+            fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
+            0o644,
+        );
+        atomic_write(&dest, b"second", 0o600).unwrap();
+        assert_eq!(
+            fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "overwrite must reset mode to requested value",
+        );
+        assert_eq!(fs::read(&dest).unwrap(), b"second");
     }
 
     #[test]
