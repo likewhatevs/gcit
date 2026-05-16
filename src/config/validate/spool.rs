@@ -188,3 +188,120 @@ fn probe_to_error(
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::parse::{
+        ActionConfig, Config, Destination, FlowConfig, HttpConfig, LocalMailConfig,
+        LocalMailTemplateConfig, LogConfig, PollDefaults, PollOverride, SourceConfig,
+    };
+    use super::*;
+    use crate::config::credential::CredentialId;
+    use crate::config::FireEvent;
+    use std::collections::BTreeMap;
+
+    fn cfg_with_local_mail_user(user: &str) -> Config {
+        Config {
+            source_path: std::path::PathBuf::new(),
+            poll: PollDefaults::default(),
+            log: LogConfig::default(),
+            http: HttpConfig::default(),
+            flow: vec![FlowConfig {
+                name: "flow1".to_string(),
+                enabled: true,
+                description: None,
+                source: SourceConfig {
+                    url: "https://github.com/o/r.git".to_string(),
+                    ref_name: "refs/heads/main".to_string(),
+                    credential_id: None,
+                },
+                action: ActionConfig::GithubWorkflowDispatch {
+                    repo: "o/r".to_string(),
+                    workflow: "ci.yml".to_string(),
+                    ref_name: "refs/heads/main".to_string(),
+                    credential_id: CredentialId::new("gh").expect("valid id"),
+                    inputs: BTreeMap::new(),
+                },
+                destination: vec![Destination::LocalMail(LocalMailConfig {
+                    user: user.to_string(),
+                    fire_on: vec![FireEvent::RunComplete],
+                    template: LocalMailTemplateConfig::default(),
+                })],
+                poll: PollOverride::default(),
+            }],
+            credential_lines: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn validate_spool_writability_none_path_resolves_to_default_spool_dir() {
+        // The None branch of `spool_root` resolves to
+        // `mail::DEFAULT_SPOOL_DIR` (/var/mail). Build a config with a
+        // user that almost certainly has no /var/mail/<user> entry on
+        // the test host and assert: (a) the probe ran (= an error
+        // surfaced — Writable would be impossible against a path that
+        // doesn't exist), (b) the surfaced error message names the
+        // /var/mail prefix.
+        //
+        // Picking a long random-ish user reduces the chance of
+        // colliding with a real spool on a workstation runner.
+        let user = "no-such-gcit-spool-user-x9q";
+        let cfg = cfg_with_local_mail_user(user);
+        let errors = validate_spool_writability(&cfg, None);
+        assert!(
+            !errors.is_empty(),
+            "the None branch must resolve to DEFAULT_SPOOL_DIR and produce an error for a non-existent spool",
+        );
+        let combined: String = errors
+            .iter()
+            .filter_map(|e| match e {
+                ConfigError::Validate { message, .. } => Some(message.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            combined.contains(crate::mail::DEFAULT_SPOOL_DIR)
+                || combined.contains(user),
+            "None-branch error must name either the default spool dir or the configured user; got: {combined}",
+        );
+    }
+
+    #[test]
+    fn validate_spool_writability_no_local_mail_destinations_emits_no_error_under_default_root() {
+        // The early-exit guard: when no flow has a local_mail
+        // destination, the function returns no errors regardless of
+        // the spool root.
+        let cfg = Config {
+            source_path: std::path::PathBuf::new(),
+            poll: PollDefaults::default(),
+            log: LogConfig::default(),
+            http: HttpConfig::default(),
+            flow: vec![FlowConfig {
+                name: "flow1".to_string(),
+                enabled: true,
+                description: None,
+                source: SourceConfig {
+                    url: "https://github.com/o/r.git".to_string(),
+                    ref_name: "refs/heads/main".to_string(),
+                    credential_id: None,
+                },
+                action: ActionConfig::GithubWorkflowDispatch {
+                    repo: "o/r".to_string(),
+                    workflow: "ci.yml".to_string(),
+                    ref_name: "refs/heads/main".to_string(),
+                    credential_id: CredentialId::new("gh").expect("valid id"),
+                    inputs: BTreeMap::new(),
+                },
+                destination: vec![],
+                poll: PollOverride::default(),
+            }],
+            credential_lines: BTreeMap::new(),
+        };
+        let errors = validate_spool_writability(&cfg, None);
+        assert!(
+            errors.is_empty(),
+            "no local_mail destinations must yield no spool errors; got: {errors:?}",
+        );
+    }
+}

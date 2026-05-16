@@ -77,16 +77,22 @@ pub(super) fn validate_http(
     if let Some(spanned) = &raw.max_concurrent {
         // Deprecated. Field is accepted but ignored — the runtime no
         // longer wires it into a Semaphore. Surface a WARN so the
-        // operator removes it on the next edit.
-        let line = span_line(source, spanned);
-        let value = *spanned.get_ref();
-        tracing::warn!(
-            target: "gcit::config",
-            config = %path.display(),
-            line,
-            value,
-            "http.max_concurrent is deprecated and ignored; remove it from the config",
-        );
+        // operator removes it on the next edit. The warning fires at
+        // most once per process so a SIGHUP reload doesn't re-spam
+        // operator logs every cycle; the AtomicBool latch is reset
+        // never (the warning is per-process by design).
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let line = span_line(source, spanned);
+            let value = *spanned.get_ref();
+            tracing::warn!(
+                target: "gcit::config",
+                config = %path.display(),
+                line,
+                value,
+                "http.max_concurrent is deprecated and ignored; remove it from the config",
+            );
+        }
     }
     HttpConfig { request_timeout }
 }
@@ -325,6 +331,66 @@ fn parse_jitter(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a `parse_cooldown` invocation with the given value.
+    /// Returns the parsed `Option<Duration>` plus any `ConfigError`s
+    /// the validator collected — handy for asserting both the
+    /// happy-path return and the lack of errors in one call.
+    fn parse_cooldown_test(value: &str) -> (Option<Duration>, Vec<ConfigError>) {
+        use toml::Spanned;
+        let source = format!("v = {:?}\n", value);
+        // Build a Spanned<String> by parsing the same TOML the
+        // production validator sees; `Spanned` is non-trivially
+        // constructible by hand because its `span` field is private.
+        #[derive(serde::Deserialize)]
+        struct Doc {
+            v: Spanned<String>,
+        }
+        let doc: Doc = toml::from_str(&source).expect("test toml must parse");
+        let mut errors: Vec<ConfigError> = Vec::new();
+        let parsed = parse_cooldown(
+            &doc.v,
+            "flow.poll.cooldown",
+            Some("flow-x"),
+            &source,
+            std::path::Path::new("inline"),
+            &mut errors,
+        );
+        (parsed, errors)
+    }
+
+    #[test]
+    fn parse_cooldown_zero_seconds_returns_duration_zero_without_errors() {
+        // `cooldown = "0s"` is the documented opt-out for throttling.
+        // The function short-circuits on `d.is_zero()` and must NOT
+        // apply the MIN_INTERVAL bound (which would reject 0s as
+        // below-minimum). Pin the special-case so a regression that
+        // dropped the short-circuit and treated 0s as below-min
+        // surfaces here.
+        let (parsed, errors) = parse_cooldown_test("0s");
+        assert_eq!(parsed, Some(Duration::ZERO));
+        assert!(
+            errors.is_empty(),
+            "0s must not surface any error; got: {errors:?}",
+        );
+    }
+
+    #[test]
+    fn parse_cooldown_one_second_rejected_below_min_interval() {
+        // Above-zero values fall through to the bounds check.
+        // `1s < MIN_INTERVAL` (15s), so the validator rejects with a
+        // Validate variant naming the field. Mirrors the same bound
+        // `parse_interval` enforces.
+        let (parsed, errors) = parse_cooldown_test("1s");
+        assert!(parsed.is_none(), "below-min must return None");
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ConfigError::Validate { field, .. } if field == "flow.poll.cooldown"
+            )),
+            "below-min must surface a Validate error on the cooldown field; got: {errors:?}",
+        );
+    }
 
     #[test]
     fn case_confusable_hint_uppercase_m_returns_months_warning() {

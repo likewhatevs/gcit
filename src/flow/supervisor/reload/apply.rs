@@ -47,8 +47,20 @@ pub(crate) async fn run_reload(
     control_handler: &Arc<ControlHandler>,
 ) {
     let mut reloading_states: Vec<NotifyState> = vec![NotifyState::Reloading];
-    if let Ok(m) = NotifyState::monotonic_usec_now() {
-        reloading_states.push(m);
+    match NotifyState::monotonic_usec_now() {
+        Ok(m) => reloading_states.push(m),
+        Err(e) => {
+            // CLOCK_MONOTONIC unavailable. sd-notify still accepts
+            // Reloading=1 without MONOTONIC_USEC; systemd's reload
+            // deadline tracking is degraded but the daemon still
+            // signals reload-in-progress. Log so operators can
+            // notice if this fires (it should not in practice).
+            tracing::debug!(
+                target: "gcit::supervisor",
+                error = %e,
+                "sd_notify monotonic_usec_now failed; Reloading state missing MONOTONIC_USEC",
+            );
+        }
     }
     let _ = sd_notify::notify(&reloading_states);
 
@@ -324,9 +336,7 @@ pub(crate) async fn run_reload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        ActionConfig, CredentialId, Destination, FlowConfig, PollOverride, SourceConfig,
-    };
+    use crate::config::{ActionConfig, Destination, FlowConfig, PollOverride, SourceConfig};
     use std::collections::BTreeMap as StdBTreeMap;
     use std::path::Path;
     use std::sync::Mutex as StdMutex;
@@ -340,10 +350,7 @@ mod tests {
     use super::super::super::types::{FlowHandle, FlowLastError};
     use crate::flow::TRIGGER_QUEUE;
     use crate::state::{State, StateUpdate};
-
-    fn cred(id: &str) -> CredentialId {
-        CredentialId::new(id).expect("valid credential id")
-    }
+    use crate::util::test_cred as cred;
 
     fn flow(name: &str, url: &str, enabled: bool, destinations: Vec<Destination>) -> FlowConfig {
         FlowConfig {

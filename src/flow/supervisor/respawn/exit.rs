@@ -96,17 +96,24 @@ pub(crate) async fn handle_flow_exit(
         panic = %panic_message,
         "flow task PANICKED; respawn scheduled after RESPAWN_DELAY",
     );
-    record_last_error(&last_errors, &exit.flow, "panic", &panic_message, None).await;
 
     if matches!(decision, RespawnDecision::PanicDuplicate) {
+        // Don't overwrite the first panic's last_error message — the
+        // sibling's panic is a downstream effect of the cancel
+        // triggered by the first panic. The operator should see the
+        // root cause (first panic) in `gcit status`, not the
+        // downstream cascade. We still log the duplicate panic above
+        // via warn! so it surfaces in journald.
         info!(
             target: "gcit::supervisor",
             flow = %exit.flow,
             role = ?exit.role,
-            "sibling role already respawning; skipping duplicate",
+            "sibling role already respawning; skipping duplicate (preserving root-cause last_error)",
         );
         return;
     }
+
+    record_last_error(&last_errors, &exit.flow, "panic", &panic_message, None).await;
 
     // PanicFirst: mark respawning + cancel the sibling.
     registry.respawning_flows.insert(exit.flow.clone());
@@ -246,16 +253,26 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     #[traced_test]
-    async fn handle_flow_exit_panic_duplicate_records_last_error_but_does_not_spawn_second_watcher()
-    {
-        // PanicDuplicate: respawning_flows already contains the flow.
-        // last_error overwrites (insert), no second watcher.
+    async fn handle_flow_exit_panic_duplicate_preserves_first_panic_last_error_and_skips_second_watcher(
+    ) {
+        // PanicDuplicate: respawning_flows already contains the flow
+        // because the sibling role's PanicFirst inserted it. The
+        // sibling's panic was the cancel-driven downstream effect of
+        // the first panic, so we must NOT overwrite the root-cause
+        // last_error with the downstream panic's body.
         let mut registry = FlowRegistry::new();
         registry.respawning_flows.insert("flow1".to_string());
 
         let last_errors: Arc<Mutex<BTreeMap<String, FlowLastError>>> =
             Arc::new(Mutex::new(BTreeMap::new()));
-        record_last_error(&last_errors, "flow1", "panic", "first panic", None).await;
+        record_last_error(
+            &last_errors,
+            "flow1",
+            "panic",
+            "first panic (root cause)",
+            None,
+        )
+        .await;
 
         let (respawn_tx, mut respawn_rx) = mpsc::channel::<RespawnRequest>(4);
         let root_cancel = CancellationToken::new();
@@ -269,10 +286,15 @@ mod tests {
         )
         .await;
 
+        // First panic's last_error must survive — it's the root cause.
         let errs = last_errors.lock().await;
         let entry = errs.get("flow1").expect("last_error must be present");
         assert_eq!(entry.kind(), "panic");
-        assert_eq!(entry.message(), "second panic from sibling");
+        assert_eq!(
+            entry.message(),
+            "first panic (root cause)",
+            "PanicDuplicate must NOT overwrite the first panic's body — that's the root cause",
+        );
         drop(errs);
 
         assert!(registry.respawning_flows.contains("flow1"));
@@ -280,8 +302,12 @@ mod tests {
         advance_past(RESPAWN_DELAY + Duration::from_secs(1)).await;
         assert!(respawn_rx.try_recv().is_err(), "no second watcher");
 
+        // The downstream panic message still surfaces in journald via
+        // the warn! at the top of handle_flow_exit's panic arm, just
+        // not in the in-memory last_error map.
+        assert!(logs_contain("flow task PANICKED"));
         assert!(logs_contain(
-            "sibling role already respawning; skipping duplicate"
+            "sibling role already respawning; skipping duplicate (preserving root-cause last_error)"
         ));
     }
 

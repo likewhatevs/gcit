@@ -144,24 +144,15 @@ fn validate_discord_template(
     errors: &mut Vec<ConfigError>,
     flow_name: &str,
 ) -> DiscordTemplateConfig {
-    // Reject local_mail-only template fields used inside
-    // discord_webhook destinations.
-    for (field, value) in [("subject", &raw.subject), ("body", &raw.body)] {
-        if let Some(spanned) = value {
-            errors.push(validate_err(
-                path,
-                vec![span_line(source, spanned)],
-                Some(flow_name),
-                format!("destination.template.{}", field),
-                spanned.get_ref().clone(),
-                format!(
-                    "destination.template.{} belongs to local_mail; not valid on discord_webhook",
-                    field
-                ),
-                format!("remove `{}` or change kind to local_mail", field),
-            ));
-        }
-    }
+    reject_cross_kind_template_fields(
+        &[("subject", &raw.subject), ("body", &raw.body)],
+        "local_mail",
+        "discord_webhook",
+        source,
+        path,
+        errors,
+        flow_name,
+    );
     DiscordTemplateConfig {
         title: compile_template_field(
             &raw.title,
@@ -323,30 +314,21 @@ fn validate_local_mail_template(
     errors: &mut Vec<ConfigError>,
     flow_name: &str,
 ) -> LocalMailTemplateConfig {
-    // Reject discord_webhook-only template fields used inside
-    // local_mail destinations.
-    for (field, value) in [
-        ("title", &raw.title),
-        ("description", &raw.description),
-        ("field_name", &raw.field_name),
-        ("field_value", &raw.field_value),
-        ("collapsed_summary", &raw.collapsed_summary),
-    ] {
-        if let Some(spanned) = value {
-            errors.push(validate_err(
-                path,
-                vec![span_line(source, spanned)],
-                Some(flow_name),
-                format!("destination.template.{}", field),
-                spanned.get_ref().clone(),
-                format!(
-                    "destination.template.{} belongs to discord_webhook; not valid on local_mail",
-                    field
-                ),
-                format!("remove `{}` or change kind to discord_webhook", field),
-            ));
-        }
-    }
+    reject_cross_kind_template_fields(
+        &[
+            ("title", &raw.title),
+            ("description", &raw.description),
+            ("field_name", &raw.field_name),
+            ("field_value", &raw.field_value),
+            ("collapsed_summary", &raw.collapsed_summary),
+        ],
+        "discord_webhook",
+        "local_mail",
+        source,
+        path,
+        errors,
+        flow_name,
+    );
     LocalMailTemplateConfig {
         subject: compile_template_field(
             &raw.subject,
@@ -364,5 +346,39 @@ fn validate_local_mail_template(
             errors,
             flow_name,
         ),
+    }
+}
+
+/// Push a `ConfigError::Validate` for each present field in `fields`
+/// that belongs to the other destination kind. `owning_kind` is the
+/// destination kind the field actually belongs to (e.g. "local_mail"
+/// when the caller is the discord template validator); `current_kind`
+/// is the destination kind the operator is currently building. Used
+/// by both template validators to keep the cross-kind-rejection
+/// message shape and per-field plumbing in one place.
+fn reject_cross_kind_template_fields(
+    fields: &[(&str, &Option<toml::Spanned<String>>)],
+    owning_kind: &str,
+    current_kind: &str,
+    source: &str,
+    path: &Path,
+    errors: &mut Vec<ConfigError>,
+    flow_name: &str,
+) {
+    for (field, value) in fields {
+        if let Some(spanned) = value {
+            errors.push(validate_err(
+                path,
+                vec![span_line(source, spanned)],
+                Some(flow_name),
+                format!("destination.template.{}", field),
+                spanned.get_ref().clone(),
+                format!(
+                    "destination.template.{} belongs to {}; not valid on {}",
+                    field, owning_kind, current_kind,
+                ),
+                format!("remove `{}` or change kind to {}", field, owning_kind),
+            ));
+        }
     }
 }

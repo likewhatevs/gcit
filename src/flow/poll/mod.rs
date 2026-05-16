@@ -262,4 +262,31 @@ mod tests {
         let p = EffectivePoll::compute(&defaults, &override_, PollStrategy::GithubApi);
         assert_eq!(p.job_interval, Duration::from_secs(15));
     }
+
+    #[test]
+    fn effective_poll_cooldown_falls_back_to_defaults_when_override_unset() {
+        // PollOverride::default() leaves cooldown=None; the resolved
+        // value must come from PollDefaults (which defaults to 5min
+        // per `default_cooldown` in config/parse.rs). Pin so a
+        // regression that dropped the cooldown fallback wiring
+        // surfaces here.
+        let defaults = crate::config::PollDefaults::default();
+        let override_ = crate::config::PollOverride::default();
+        let p = EffectivePoll::compute(&defaults, &override_, PollStrategy::GithubApi);
+        assert_eq!(p.cooldown, defaults.cooldown);
+    }
+
+    #[test]
+    fn effective_poll_cooldown_override_wins_over_defaults() {
+        let defaults = crate::config::PollDefaults {
+            cooldown: Duration::from_secs(600),
+            ..Default::default()
+        };
+        let override_ = crate::config::PollOverride {
+            cooldown: Some(Duration::from_secs(45)),
+            ..Default::default()
+        };
+        let p = EffectivePoll::compute(&defaults, &override_, PollStrategy::LsRemote);
+        assert_eq!(p.cooldown, Duration::from_secs(45));
+    }
 }

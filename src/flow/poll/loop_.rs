@@ -337,14 +337,10 @@ fn seed_from_name(name: &str) -> u64 {
 mod tests {
     use super::*;
     use crate::flow::poll::EffectivePoll;
+    use crate::util::test_sha as sha;
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::time::Duration;
-
-    fn sha(byte: u8) -> gix_hash::ObjectId {
-        let hex = format!("{byte:02x}").repeat(20);
-        gix_hash::ObjectId::from_hex(hex.as_bytes()).unwrap()
-    }
 
     #[test]
     fn seed_from_name_is_deterministic() {
@@ -637,12 +633,16 @@ mod tests {
         assert!(saw_observation, "must emit PollObservation with new SHA");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn run_with_executor_returns_immediately_on_pre_cancelled_token() {
         // Pre-cancelled token must exit at the top-of-loop select!
-        // before the executor is reached. `source_interval = 60s` is
-        // 600x the 100ms wall-clock budget, so the sleep arm cannot
-        // accidentally win on a loaded runner.
+        // before the executor is reached. Under `start_paused = true`
+        // virtual time only advances when nothing else is ready;
+        // `cancel.cancelled()` is immediately ready (token already
+        // fired) so the select! resolves it without ever polling
+        // `tokio::time::sleep`. Pin two facts: the loop returns AT
+        // ALL (the timeout would catch a hang), and virtual time
+        // does not advance (the sleep arm never won).
         let cancel = CancellationToken::new();
         cancel.cancel();
         let params = PollParams {
@@ -663,17 +663,20 @@ mod tests {
         let (state_tx, _state_rx) = tokio::sync::mpsc::channel::<StateUpdate>(8);
         let (trigger_tx, _trigger_rx) = tokio::sync::mpsc::channel::<TriggerSignal>(8);
         let executor = NeverFiresExecutor;
-        let start = std::time::Instant::now();
+        let virtual_start = tokio::time::Instant::now();
         tokio::time::timeout(
-            Duration::from_millis(100),
+            Duration::from_secs(5),
             run_with_executor(params, executor, None, None, state_tx, trigger_tx, cancel),
         )
         .await
-        .expect("pre-cancelled token must terminate the loop within 100ms wall-clock");
-        let elapsed = start.elapsed();
+        .expect("pre-cancelled token must terminate the loop");
+        let virtual_elapsed = virtual_start.elapsed();
+        // Virtual time may advance by microseconds while the runtime
+        // schedules — pin that it doesn't approach the source_interval
+        // (60s) which would mean the sleep arm won.
         assert!(
-            elapsed < Duration::from_millis(100),
-            "loop must exit on cancel arm, not consume source_interval; elapsed: {elapsed:?}",
+            virtual_elapsed < Duration::from_secs(1),
+            "loop must exit on cancel arm without consuming source_interval; virtual elapsed: {virtual_elapsed:?}",
         );
     }
 }
