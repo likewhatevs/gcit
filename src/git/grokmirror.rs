@@ -178,7 +178,28 @@ async fn fetch_manifest_inner(client: &Client, url: &str) -> Result<Manifest, Gr
     // body) the streaming counter below catches it. If Content-Length
     // is absent (chunked encoding), only the streaming counter
     // applies.
-    if let Some(len) = response.content_length() {
+    check_content_length_cap(response.content_length())?;
+    let bytes = read_capped(response).await?;
+    parse_manifest_bytes(&bytes)
+}
+
+/// Pre-check the Content-Length header (when present) against
+/// `MAX_COMPRESSED_BYTES`. Extracted as a standalone function so
+/// integration tests can pin the cap without standing up a wiremock
+/// server that allows mismatched Content-Length headers (hyper
+/// rejects mismatched bodies before the production code's pre-check
+/// fires, blocking the natural test path).
+///
+/// `None` (header absent / chunked encoding) returns Ok — the
+/// streaming `read_capped` enforces the cap on the response body
+/// itself in that case.
+///
+/// `#[doc(hidden)] pub` mirrors the test-seam pattern at
+/// `gcit::mail::map_io_error`: callable from integration tests,
+/// hidden from rustdoc.
+#[doc(hidden)]
+pub fn check_content_length_cap(declared: Option<u64>) -> Result<(), GrokmirrorError> {
+    if let Some(len) = declared {
         if len > MAX_COMPRESSED_BYTES {
             return Err(GrokmirrorError::Permanent {
                 message: format!(
@@ -187,8 +208,7 @@ async fn fetch_manifest_inner(client: &Client, url: &str) -> Result<Manifest, Gr
             });
         }
     }
-    let bytes = read_capped(response).await?;
-    parse_manifest_bytes(&bytes)
+    Ok(())
 }
 
 /// Stream the response body into a Vec while enforcing

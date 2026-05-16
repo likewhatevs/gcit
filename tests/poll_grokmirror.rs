@@ -352,36 +352,56 @@ async fn fetch_manifest_handles_trailing_slash_in_base_url() {
 ///
 /// Real coverage exists for the streaming-counter arm via the
 /// in-module `parse_rejects_decompressed_over_cap` test in the
-/// grokmirror module's bottom tests block — that one pins the
-/// post-decompression cap on a synthetic body. The pre-check via
-/// Content-Length is unreachable from a wiremock fixture without
-/// swapping the HTTP server for a hand-rolled hyper service. The
-/// 64 MiB body brief explicitly skipped is the other path; both
-/// lead to the same Permanent-cap rejection in production. Re-enable
-/// this test if the scaffolding gains a mechanism to override
-/// Content-Length without hyper rejecting the body shape.
-#[tokio::test]
-#[ignore = "hyper rejects mismatched Content-Length custom header — connection breaks before pre-check fires"]
-async fn fetch_manifest_oversized_content_length_returns_permanent() {
-    let mock = MockServer::start().await;
+/// Pin the Content-Length pre-check that fetch_manifest applies
+/// BEFORE allocating a streaming buffer: a server that declares
+/// `Content-Length: <oversized>` (regardless of what bytes follow)
+/// must surface as `Permanent` so backon doesn't retry against a
+/// host that's about to push gigabytes at us.
+///
+/// Wiremock + hyper cannot drive this test end-to-end because hyper
+/// rejects mismatched Content-Length headers before the production
+/// code's pre-check fires. The `check_content_length_cap` seam in
+/// `gcit::git::grokmirror` exposes the pre-check directly so the
+/// test pins the cap with the actual header value, sidestepping
+/// the hyper transport.
+#[test]
+fn fetch_manifest_oversized_content_length_returns_permanent() {
     // 65 MiB — one byte past MAX_COMPRESSED_BYTES (64 MiB).
     let oversized: u64 = 65 * 1024 * 1024;
-    Mock::given(method("GET"))
-        .and(path("/manifest.js.gz"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-length", oversized.to_string().as_str())
-                .set_body_raw(b"\x1f\x8b\x08\x00".as_slice(), "application/octet-stream"),
-        )
-        .expect(1)
-        .mount(&mock)
-        .await;
+    let err = grokmirror::check_content_length_cap(Some(oversized))
+        .expect_err("oversize Content-Length must surface as Err");
+    match err {
+        GrokmirrorError::Permanent { message } => {
+            assert!(
+                message.contains(&oversized.to_string()),
+                "Permanent message must name the declared length; got: {message}",
+            );
+            assert!(
+                message.contains("Content-Length"),
+                "Permanent message must reference the header; got: {message}",
+            );
+        }
+        other => panic!("expected Permanent for oversize Content-Length; got: {other:?}"),
+    }
+}
 
-    let client = build_client();
-    let err = grokmirror::fetch_manifest(&client, &mock.uri())
-        .await
-        .expect_err("oversize Content-Length must be Err");
-    assert!(matches!(err, GrokmirrorError::Permanent { .. }));
+/// Companion: a Content-Length within the cap (the cap itself, exactly
+/// 64 MiB, is acceptable; the rejection is strictly greater than) must
+/// produce Ok. Pin the boundary so a mutation that swapped `>` for
+/// `>=` would surface here.
+#[test]
+fn fetch_manifest_content_length_at_cap_accepts() {
+    grokmirror::check_content_length_cap(Some(grokmirror::MAX_COMPRESSED_BYTES))
+        .expect("Content-Length == MAX_COMPRESSED_BYTES must accept");
+}
+
+/// Companion: absent Content-Length (chunked encoding or hostile
+/// server omits the header) returns Ok — the streaming counter in
+/// `read_capped` enforces the cap on the body bytes instead.
+#[test]
+fn fetch_manifest_absent_content_length_accepts() {
+    grokmirror::check_content_length_cap(None)
+        .expect("absent Content-Length must accept; streaming counter enforces the cap");
 }
 
 /// `POLL_TIMEOUT` is the wall-clock cap on a single `fetch_manifest`
