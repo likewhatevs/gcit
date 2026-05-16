@@ -212,6 +212,90 @@ pub async fn wait_for_control_socket(socket_path: &std::path::Path) {
 /// JSON object. Drives the live control listener bound by the daemon
 /// — proves the panic-respawn / reload paths are observable to the
 /// same wire-protocol surface operators see via `gcit status`.
+/// Bundled output of `build_test_factories`: the PollTaskFactory +
+/// DispatchTaskFactory the supervisor harness needs to drive
+/// `run_with_factories`, plus the three Arc<AtomicUsize> counters
+/// each underlying executor increments. Tests can ignore any
+/// counter they don't assert on (e.g. boot tests usually only
+/// check `factory_calls`).
+pub struct TestFactories {
+    pub poll_factory: gcit::flow::supervisor::PollTaskFactory,
+    pub dispatch_factory: gcit::flow::supervisor::DispatchTaskFactory,
+    pub factory_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub poll_cycle_invocations: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub dispatch_invocations: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Construct the standard ScriptedPollExecutor + ScriptedDispatchExecutor
+/// pair wired through PollTaskFactory + DispatchTaskFactory closures
+/// that increment a shared counter on every spawn. `sha_byte` seeds
+/// the poll executor's `Refreshed { sha }` so distinct tests pin
+/// distinct hex values when asserting state.json contents.
+///
+/// Duplicates eliminated: 6 sites (boot.rs, reload.rs ×3, control.rs,
+/// the SIGINT test) previously inlined ~50 lines of identical
+/// boilerplate per test.
+pub fn build_test_factories(sha_byte: u8) -> TestFactories {
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use gcit::flow::dispatcher::run_with_executor as dispatcher_run_with_executor;
+    use gcit::flow::poll::run_with_executor as poll_run_with_executor;
+    use gcit::flow::supervisor::{DispatchTaskFactory, PollTaskFactory};
+
+    let factory_calls = Arc::new(AtomicUsize::new(0));
+    let poll_cycle_invocations = Arc::new(AtomicUsize::new(0));
+    let dispatch_invocations = Arc::new(AtomicUsize::new(0));
+
+    let poll_factory: PollTaskFactory = {
+        let factory_calls = Arc::clone(&factory_calls);
+        let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
+        Arc::new(
+            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
+                factory_calls.fetch_add(1, Ordering::SeqCst);
+                let executor =
+                    ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), sha_byte);
+                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                    Box::pin(poll_run_with_executor(
+                        params,
+                        executor,
+                        last_sha,
+                        last_dispatched_at,
+                        state_tx,
+                        trigger_tx,
+                        cancel,
+                    ));
+                fut
+            },
+        )
+    };
+    let dispatch_factory: DispatchTaskFactory = {
+        let invocations = Arc::clone(&dispatch_invocations);
+        Arc::new(move |params, trigger_rx, state_tx, last_errors, cancel| {
+            let executor = ScriptedDispatchExecutor::new(Arc::clone(&invocations));
+            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                Box::pin(dispatcher_run_with_executor(
+                    params,
+                    executor,
+                    trigger_rx,
+                    state_tx,
+                    last_errors,
+                    cancel,
+                ));
+            fut
+        })
+    };
+
+    TestFactories {
+        poll_factory,
+        dispatch_factory,
+        factory_calls,
+        poll_cycle_invocations,
+        dispatch_invocations,
+    }
+}
+
 pub async fn fetch_status(socket_path: &std::path::Path, flow: Option<&str>) -> serde_json::Value {
     let mut client = gcit::control::Client::connect(socket_path)
         .await

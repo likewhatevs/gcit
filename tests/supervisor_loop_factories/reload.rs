@@ -3,22 +3,16 @@
 //   * Adding a flow → `Spawn` arm (kept flow stays alive).
 //   * Non-URL change (ref_name) → `Restart { url_changed: false }` arm.
 
-use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tokio::time::timeout;
 
-use gcit::flow::dispatcher::run_with_executor as dispatcher_run_with_executor;
-use gcit::flow::poll::run_with_executor as poll_run_with_executor;
-use gcit::flow::supervisor::{
-    run_with_factories, DaemonParams, DispatchTaskFactory, PollTaskFactory,
-};
+use gcit::flow::supervisor::{run_with_factories, DaemonParams};
 
 use super::fixtures::{
-    fetch_status, setup_daemon_fixture, teardown_daemon_env, wait_for_control_socket, write_config,
-    ScriptedDispatchExecutor, ScriptedPollExecutor, ONE_FLOW_CONFIG, ONE_FLOW_CONFIG_REF_CHANGED,
+    build_test_factories, fetch_status, setup_daemon_fixture, teardown_daemon_env,
+    wait_for_control_socket, write_config, ONE_FLOW_CONFIG, ONE_FLOW_CONFIG_REF_CHANGED,
     ONE_FLOW_CONFIG_URL_CHANGED, TWO_FLOW_CONFIG_FOR_RELOAD,
 };
 
@@ -33,47 +27,8 @@ async fn supervisor_sighup_reload_restarts_url_changed_flow() {
     let config_path = write_config(fixture.config_dir.path(), ONE_FLOW_CONFIG);
     let control_socket = fixture.runtime_dir.path().join("control.sock");
 
-    let factory_calls = Arc::new(AtomicUsize::new(0));
-    let poll_cycle_invocations = Arc::new(AtomicUsize::new(0));
-    let dispatch_invocations = Arc::new(AtomicUsize::new(0));
-
-    let poll_factory: PollTaskFactory = {
-        let factory_calls = Arc::clone(&factory_calls);
-        let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(
-            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-                factory_calls.fetch_add(1, Ordering::SeqCst);
-                let executor = ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xcc);
-                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                    Box::pin(poll_run_with_executor(
-                        params,
-                        executor,
-                        last_sha,
-                        last_dispatched_at,
-                        state_tx,
-                        trigger_tx,
-                        cancel,
-                    ));
-                fut
-            },
-        )
-    };
-    let dispatch_factory: DispatchTaskFactory = {
-        let invocations = Arc::clone(&dispatch_invocations);
-        Arc::new(move |params, trigger_rx, state_tx, last_errors, cancel| {
-            let executor = ScriptedDispatchExecutor::new(Arc::clone(&invocations));
-            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(dispatcher_run_with_executor(
-                    params,
-                    executor,
-                    trigger_rx,
-                    state_tx,
-                    last_errors,
-                    cancel,
-                ));
-            fut
-        })
-    };
+    let factories = build_test_factories(0xcc);
+    let factory_calls = std::sync::Arc::clone(&factories.factory_calls);
 
     let reload_config_path = config_path.clone();
     let params = DaemonParams {
@@ -83,7 +38,7 @@ async fn supervisor_sighup_reload_restarts_url_changed_flow() {
     };
 
     let daemon_handle = tokio::spawn(async move {
-        run_with_factories(params, poll_factory, dispatch_factory)
+        run_with_factories(params, factories.poll_factory, factories.dispatch_factory)
             .await
             .expect("daemon must complete cleanly")
     });
@@ -152,47 +107,8 @@ async fn supervisor_sighup_reload_adds_new_flow_via_spawn_arm() {
     let config_path = write_config(fixture.config_dir.path(), ONE_FLOW_CONFIG);
     let control_socket = fixture.runtime_dir.path().join("control.sock");
 
-    let factory_calls = Arc::new(AtomicUsize::new(0));
-    let poll_cycle_invocations = Arc::new(AtomicUsize::new(0));
-    let dispatch_invocations = Arc::new(AtomicUsize::new(0));
-
-    let poll_factory: PollTaskFactory = {
-        let factory_calls = Arc::clone(&factory_calls);
-        let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(
-            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-                factory_calls.fetch_add(1, Ordering::SeqCst);
-                let executor = ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xdd);
-                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                    Box::pin(poll_run_with_executor(
-                        params,
-                        executor,
-                        last_sha,
-                        last_dispatched_at,
-                        state_tx,
-                        trigger_tx,
-                        cancel,
-                    ));
-                fut
-            },
-        )
-    };
-    let dispatch_factory: DispatchTaskFactory = {
-        let invocations = Arc::clone(&dispatch_invocations);
-        Arc::new(move |params, trigger_rx, state_tx, last_errors, cancel| {
-            let executor = ScriptedDispatchExecutor::new(Arc::clone(&invocations));
-            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(dispatcher_run_with_executor(
-                    params,
-                    executor,
-                    trigger_rx,
-                    state_tx,
-                    last_errors,
-                    cancel,
-                ));
-            fut
-        })
-    };
+    let factories = build_test_factories(0xdd);
+    let factory_calls = std::sync::Arc::clone(&factories.factory_calls);
 
     let reload_config_path = config_path.clone();
     let params = DaemonParams {
@@ -202,7 +118,7 @@ async fn supervisor_sighup_reload_adds_new_flow_via_spawn_arm() {
     };
 
     let daemon_handle = tokio::spawn(async move {
-        run_with_factories(params, poll_factory, dispatch_factory)
+        run_with_factories(params, factories.poll_factory, factories.dispatch_factory)
             .await
             .expect("daemon must complete cleanly")
     });
@@ -290,47 +206,8 @@ async fn supervisor_sighup_reload_restarts_non_url_change_via_restart_arm() {
     let config_path = write_config(fixture.config_dir.path(), ONE_FLOW_CONFIG);
     let control_socket = fixture.runtime_dir.path().join("control.sock");
 
-    let factory_calls = Arc::new(AtomicUsize::new(0));
-    let poll_cycle_invocations = Arc::new(AtomicUsize::new(0));
-    let dispatch_invocations = Arc::new(AtomicUsize::new(0));
-
-    let poll_factory: PollTaskFactory = {
-        let factory_calls = Arc::clone(&factory_calls);
-        let poll_cycle_invocations = Arc::clone(&poll_cycle_invocations);
-        Arc::new(
-            move |params, last_sha, last_dispatched_at, state_tx, trigger_tx, cancel| {
-                factory_calls.fetch_add(1, Ordering::SeqCst);
-                let executor = ScriptedPollExecutor::new(Arc::clone(&poll_cycle_invocations), 0xee);
-                let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                    Box::pin(poll_run_with_executor(
-                        params,
-                        executor,
-                        last_sha,
-                        last_dispatched_at,
-                        state_tx,
-                        trigger_tx,
-                        cancel,
-                    ));
-                fut
-            },
-        )
-    };
-    let dispatch_factory: DispatchTaskFactory = {
-        let invocations = Arc::clone(&dispatch_invocations);
-        Arc::new(move |params, trigger_rx, state_tx, last_errors, cancel| {
-            let executor = ScriptedDispatchExecutor::new(Arc::clone(&invocations));
-            let fut: Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(dispatcher_run_with_executor(
-                    params,
-                    executor,
-                    trigger_rx,
-                    state_tx,
-                    last_errors,
-                    cancel,
-                ));
-            fut
-        })
-    };
+    let factories = build_test_factories(0xee);
+    let factory_calls = std::sync::Arc::clone(&factories.factory_calls);
 
     let reload_config_path = config_path.clone();
     let params = DaemonParams {
@@ -340,7 +217,7 @@ async fn supervisor_sighup_reload_restarts_non_url_change_via_restart_arm() {
     };
 
     let daemon_handle = tokio::spawn(async move {
-        run_with_factories(params, poll_factory, dispatch_factory)
+        run_with_factories(params, factories.poll_factory, factories.dispatch_factory)
             .await
             .expect("daemon must complete cleanly")
     });
