@@ -193,10 +193,7 @@ pub fn timeout_error(deadline: Duration) -> GithubErrorKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn cred(id: &str) -> CredentialId {
-        CredentialId::new(id).expect("valid id")
-    }
+    use crate::util::test_cred as cred;
 
     fn ctx<'a>(
         status: StatusCode,

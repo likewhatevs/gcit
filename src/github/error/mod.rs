@@ -201,10 +201,7 @@ pub const SERVER_ERROR_MAX_ATTEMPTS: u32 = 6;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn cred(id: &str) -> CredentialId {
-        CredentialId::new(id).expect("valid id")
-    }
+    use crate::util::test_cred as cred;
 
     #[test]
     fn retryability_matches_spec() {

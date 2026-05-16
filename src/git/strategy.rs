@@ -156,10 +156,7 @@ pub fn compare_sha(last: Option<ObjectId>, observed: ObjectId) -> DiffOutcome {
 mod tests {
     use super::*;
 
-    fn sha(byte: u8) -> ObjectId {
-        let hex = format!("{byte:02x}").repeat(20);
-        ObjectId::from_hex(hex.as_bytes()).unwrap()
-    }
+    use crate::util::test_sha as sha;
 
     #[test]
     fn auto_detect_github_variants() {

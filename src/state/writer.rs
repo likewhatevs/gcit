@@ -274,8 +274,6 @@ pub fn run_mirrored(
 mod tests {
     use super::*;
     use crate::state::apply::{State, StateUpdate};
-    use chrono::{DateTime, Utc};
-    use gix_hash::ObjectId;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
     use tracing_test::traced_test;
@@ -296,14 +294,7 @@ mod tests {
         s.contains(needle)
     }
 
-    fn t(secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(secs, 0).unwrap()
-    }
-
-    fn sha(byte: u8) -> ObjectId {
-        let hex = format!("{byte:02x}").repeat(20);
-        ObjectId::from_hex(hex.as_bytes()).unwrap()
-    }
+    use crate::util::{test_sha as sha, test_ts as t};
 
     /// Writer drains pending updates after the Sender drops.
     #[test]

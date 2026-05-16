@@ -318,14 +318,7 @@ impl State {
 mod tests {
     use super::*;
 
-    fn t(secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(secs, 0).unwrap()
-    }
-
-    fn sha(byte: u8) -> ObjectId {
-        let hex = format!("{byte:02x}").repeat(20);
-        ObjectId::from_hex(hex.as_bytes()).unwrap()
-    }
+    use crate::util::{test_sha as sha, test_ts as t};
 
     #[test]
     fn poll_observation_lww_on_last_sha() {

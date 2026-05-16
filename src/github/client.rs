@@ -431,10 +431,10 @@ impl ClientBuilder {
 mod tests {
     use super::*;
 
-    use crate::util::ensure_crypto_provider;
+    use crate::util::{ensure_crypto_provider, test_cred};
 
     fn cred() -> CredentialId {
-        CredentialId::new("github_pat").expect("valid id")
+        test_cred("github_pat")
     }
 
     fn pat() -> SecretString {

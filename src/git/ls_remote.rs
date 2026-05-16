@@ -329,13 +329,9 @@ pub const POLL_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::test_sha as sha;
     use bstr::BString;
     use gix_hash::ObjectId;
-
-    fn sha(byte: u8) -> ObjectId {
-        let hex = format!("{byte:02x}").repeat(20);
-        ObjectId::from_hex(hex.as_bytes()).unwrap()
-    }
 
     fn make_direct(name: &str, oid: ObjectId) -> handshake::Ref {
         handshake::Ref::Direct {

@@ -134,11 +134,8 @@ pub(crate) fn compute_reload_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ActionConfig, CredentialId, Destination, PollOverride, SourceConfig};
-
-    fn cred(id: &str) -> CredentialId {
-        CredentialId::new(id).expect("valid credential id")
-    }
+    use crate::config::{ActionConfig, Destination, PollOverride, SourceConfig};
+    use crate::util::test_cred as cred;
 
     fn flow(name: &str, url: &str, enabled: bool, destinations: Vec<Destination>) -> FlowConfig {
         FlowConfig {

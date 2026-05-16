@@ -88,17 +88,8 @@ pub(crate) async fn send_trigger_then_observation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use crate::util::{test_sha as sha, test_ts as ts};
     use std::time::Duration;
-
-    fn sha(byte: u8) -> gix_hash::ObjectId {
-        let hex = format!("{byte:02x}").repeat(20);
-        gix_hash::ObjectId::from_hex(hex.as_bytes()).unwrap()
-    }
-
-    fn ts(secs: i64) -> chrono::DateTime<Utc> {
-        chrono::DateTime::from_timestamp(secs, 0).unwrap()
-    }
 
     /// Order invariant: pre-fill the state channel; the helper's
     /// observation send blocks while the trigger send completes

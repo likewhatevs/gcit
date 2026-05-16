@@ -128,9 +128,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
-    fn cred(id: &str) -> CredentialId {
-        CredentialId::new(id).expect("valid credential id")
-    }
+    use crate::util::test_cred as cred;
 
     fn discord_dest(id: &str, fire_on: Vec<FireEvent>) -> Destination {
         Destination::DiscordWebhook(DiscordWebhookConfig {

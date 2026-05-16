@@ -93,6 +93,32 @@ pub fn ensure_crypto_provider() {
     });
 }
 
+/// Build a 40-hex SHA-1 ObjectId from a single byte by repeating its
+/// hex representation 20 times. Convenience for tests that need a
+/// distinct stable SHA without caring about the value.
+///
+/// `pub` (`#[cfg(test)]` only) so every test module across the crate
+/// can use one canonical helper rather than redeclaring its own.
+#[cfg(test)]
+pub fn test_sha(byte: u8) -> gix_hash::ObjectId {
+    let hex = format!("{byte:02x}").repeat(20);
+    gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("repeated hex is valid")
+}
+
+/// Build a `DateTime<Utc>` from an epoch-seconds value. Convenience
+/// for tests that need a stable timestamp.
+#[cfg(test)]
+pub fn test_ts(secs: i64) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::from_timestamp(secs, 0).expect("epoch seconds in-range")
+}
+
+/// Build a `CredentialId` for tests, panicking on the impossible
+/// "invalid id" path.
+#[cfg(test)]
+pub fn test_cred(id: &str) -> crate::config::CredentialId {
+    crate::config::CredentialId::new(id).expect("test credential id must be valid")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
