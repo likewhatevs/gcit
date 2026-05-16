@@ -750,6 +750,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn drain_flows_on_shutdown_returns_immediately_for_empty_joinset() {
+        // The boot path always reaches drain_flows_on_shutdown after
+        // root_cancel.cancel(); when no flows were spawned (e.g. a
+        // config with zero flows or a panic during initial spawn),
+        // the JoinSet is empty and the function must return without
+        // wedging on `join_next().await`. A regression that swapped
+        // `while let Some(...)` for an unconditional `let _ = join_next().await`
+        // would hang here.
+        let mut js: JoinSet<FlowExit> = JoinSet::new();
+        drain_flows_on_shutdown(&mut js).await;
+        assert!(js.is_empty(), "empty JoinSet must remain empty after drain",);
+    }
+
+    #[tokio::test]
+    async fn drain_flows_on_shutdown_drains_already_completed_tasks() {
+        // A flow that finished naturally (or panicked + got handled
+        // before shutdown) leaves a completed task in the JoinSet; the
+        // shutdown drain must reap it rather than leaving the JoinSet
+        // half-full when run() returns. Pin the drain semantics so a
+        // regression that broke out of the loop on first join surfaces.
+        let mut js: JoinSet<FlowExit> = JoinSet::new();
+        js.spawn(async {
+            FlowExit {
+                flow: "test-flow-a".to_string(),
+                role: super::super::types::FlowRole::Poll,
+                panic: None,
+            }
+        });
+        js.spawn(async {
+            FlowExit {
+                flow: "test-flow-b".to_string(),
+                role: super::super::types::FlowRole::Dispatcher,
+                panic: None,
+            }
+        });
+        drain_flows_on_shutdown(&mut js).await;
+        assert!(
+            js.is_empty(),
+            "drain must reap every completed task; remaining: {}",
+            js.len(),
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_watchdog_returns_none_when_watchdog_unset() {
+        // sd_notify::watchdog_enabled reads $WATCHDOG_USEC; unset (the
+        // test default) means the unit has no `WatchdogSec=` configured
+        // and the function must return None rather than spawning an
+        // idle ticker. A regression that always spawned would leak a
+        // tokio task per test run.
+        let cancel = CancellationToken::new();
+        let handle = spawn_watchdog(cancel);
+        assert!(
+            handle.is_none(),
+            "no $WATCHDOG_USEC must produce no watchdog task",
+        );
+    }
+
+    #[test]
+    fn notify_ready_or_warn_does_not_panic_outside_systemd() {
+        // $NOTIFY_SOCKET unset is the non-systemd test context;
+        // sd_notify::notify is a no-op in that case. The wrapper must
+        // not panic and must not propagate a non-existent error — pin
+        // the no-op happy path so a regression that switched to
+        // .expect() on the sd_notify result surfaces here rather than
+        // crashing the daemon at boot under `gcit run` (foreground).
+        notify_ready_or_warn();
+    }
+
+    #[test]
+    fn notify_stopping_or_warn_does_not_panic_outside_systemd() {
+        // Mirror notify_ready_or_warn: the Stopping notify happens
+        // unconditionally at shutdown, even in foreground/non-systemd
+        // runs. The wrapper must never panic on a no-op sd_notify.
+        notify_stopping_or_warn();
+    }
+
+    #[tokio::test]
     async fn bind_control_listener_creates_missing_parent_directories_on_fallback() {
         // Production callers may point `--control-socket` at a path
         // whose parent directory does not yet exist (e.g. fresh

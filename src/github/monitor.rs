@@ -396,4 +396,50 @@ mod tests {
             _ => panic!("expected Done"),
         }
     }
+
+    #[test]
+    fn empty_run_summary_defaults_all_optional_fields_to_unset() {
+        // Pin the full default shape — the prior test covered status,
+        // conclusion, run_attempt, and jobs but not the remaining
+        // fields. A regression that pre-populated `run_url` with a
+        // dummy string or `run_number` with 1 (instead of 0) would
+        // leak into operator-visible status output without surfacing
+        // here. The state-writer also writes these as snapshots, so a
+        // bogus default would persist across restarts.
+        let s = empty_run_summary(42);
+        assert_eq!(
+            s.run_url, "",
+            "run_url must default to an empty string until the monitor observes the real one",
+        );
+        assert_eq!(s.run_number, 0, "run_number must default to 0");
+        assert!(
+            s.started_at.is_none(),
+            "started_at must default to None until the monitor observes the real timestamp",
+        );
+        assert!(
+            s.completed_at.is_none(),
+            "completed_at must default to None — the run hasn't terminated yet",
+        );
+    }
+
+    #[test]
+    fn monitor_outcome_failed_carries_supplied_error() {
+        // The supervisor maps MonitorOutcome::Failed.error onto a
+        // last_error entry in `gcit status`. A regression that lost
+        // the error payload (e.g. switching the field for a discard)
+        // would silently drop diagnostic context.
+        let original = GithubErrorKind::Timeout {
+            timeout: Duration::from_secs(7),
+        };
+        let outcome = MonitorOutcome::Failed { error: original };
+        match outcome {
+            MonitorOutcome::Failed { error } => {
+                assert!(
+                    matches!(error, GithubErrorKind::Timeout { timeout } if timeout == Duration::from_secs(7)),
+                    "Failed.error must round-trip the supplied GithubErrorKind verbatim",
+                );
+            }
+            other => panic!("expected Failed; got {other:?}"),
+        }
+    }
 }
