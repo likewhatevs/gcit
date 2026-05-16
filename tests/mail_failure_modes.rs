@@ -523,11 +523,14 @@ async fn transient_error_logged_at_info_with_flow_context() {
     );
 }
 
-#[tokio::test]
-#[ignore = "needs supervisor wiring — last_error is updated outside the notifier"]
-async fn permanent_error_writes_to_status_last_error() {
-    // `gcit status` shows last_error per flow. The notifier returns
-    // Permanent; the supervisor records last_error. Pinning this
-    // requires running the supervisor end-to-end against a fixture
-    // (separate work item).
-}
+// "permanent_error_writes_to_status_last_error" was the original name
+// of an #[ignore]'d stub assuming notifier failures route into
+// `gcit status` last_error. They DO NOT, by design: the supervisor's
+// last_errors map tracks dispatch and poll failures (which can block
+// the next dispatch / observation cycle); notifier failures surface
+// in journald and never block the daemon's primary work. The
+// notifier-side WARN / INFO emits and the fan-out's WARN in
+// `log_notify_outcome` are the operator-facing surface; both are
+// pinned by `permanent_error_logged_at_warn_with_flow_context` and
+// `transient_error_logged_at_info_with_flow_context` above. The stub
+// is removed because its premise contradicts the actual design.
