@@ -994,4 +994,195 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }
+
+    #[test]
+    fn is_false_helper_returns_true_only_for_false() {
+        // serde's `skip_serializing_if = "is_false"` is the contract:
+        // the field is omitted when the predicate returns true. Pin
+        // both arms so a regression that inverts the predicate (and
+        // would silently emit user_created_by_install=false in every
+        // manifest) surfaces here.
+        assert!(is_false(&false));
+        assert!(!is_false(&true));
+    }
+
+    #[test]
+    fn reject_user_plus_local_mail_rejects_user_scope_with_local_mail() {
+        // The forbidden cell of the 2x2 (scope, has_local_mail) matrix:
+        // a per-user systemd manager cannot grant /var/mail group access,
+        // so this combination must error at install time rather than
+        // produce a silently-broken unit.
+        let result = reject_user_plus_local_mail(InstallScope::User, true);
+        assert!(
+            result.is_err(),
+            "(User, local_mail=true) must reject; got Ok",
+        );
+    }
+
+    #[test]
+    fn reject_user_plus_local_mail_accepts_user_scope_without_local_mail() {
+        // Discord-only --user install is the supported path; must pass.
+        reject_user_plus_local_mail(InstallScope::User, false)
+            .expect("(User, local_mail=false) must accept");
+    }
+
+    #[test]
+    fn reject_user_plus_local_mail_accepts_system_scope_with_local_mail() {
+        // --system + local_mail is the explicitly-supported path that
+        // triggers the useradd step downstream.
+        reject_user_plus_local_mail(InstallScope::System, true)
+            .expect("(System, local_mail=true) must accept");
+    }
+
+    #[test]
+    fn reject_user_plus_local_mail_accepts_system_scope_without_local_mail() {
+        // --system without local_mail relies on DynamicUser=yes; no
+        // useradd needed but still a valid combination.
+        reject_user_plus_local_mail(InstallScope::System, false)
+            .expect("(System, local_mail=false) must accept");
+    }
+
+    #[test]
+    fn ensure_parent_creates_nested_directory_chain() {
+        // The write_outputs loop relies on ensure_parent to materialise
+        // multi-level missing parents (e.g. $XDG_CONFIG_HOME/systemd/user/
+        // before gcit.service lands). A regression that swapped
+        // create_dir_all for create_dir would fail only on the
+        // grandparent level — pin the recursive create explicitly.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("a/b/c/file.txt");
+        let parent = target.parent().expect("target has parent");
+        assert!(!parent.exists(), "precondition: parent must not yet exist");
+        ensure_parent(&target).expect("ensure_parent must materialise chain");
+        assert!(
+            parent.exists(),
+            "ensure_parent must create the full nested parent chain at {}",
+            parent.display(),
+        );
+    }
+
+    #[test]
+    fn ensure_parent_is_idempotent_when_parent_already_exists() {
+        // create_dir_all is defined as idempotent; pin that
+        // ensure_parent surfaces that contract rather than erroring on
+        // a pre-existing parent.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("file.txt");
+        ensure_parent(&target).expect("first call");
+        ensure_parent(&target).expect("second call must be idempotent");
+    }
+
+    #[test]
+    fn ensure_parent_accepts_path_with_no_parent_component() {
+        // A bare filename ("foo.txt") has no parent — the function
+        // must return Ok without touching the filesystem.
+        let bare = PathBuf::from("file.txt");
+        ensure_parent(&bare).expect("bare filename must not error");
+    }
+
+    fn output_file_at(path: PathBuf) -> OutputFile {
+        OutputFile {
+            path,
+            contents: Vec::new(),
+            mode: 0o644,
+            label: "test",
+        }
+    }
+
+    #[test]
+    fn refuse_silent_overwrite_returns_ok_when_no_outputs_collide() {
+        // Fresh install path: no managed file exists yet, function
+        // must pass without prompting `--force`.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let outputs = vec![
+            output_file_at(tmp.path().join("svc")),
+            output_file_at(tmp.path().join("sock")),
+            output_file_at(tmp.path().join("cfg")),
+        ];
+        refuse_silent_overwrite(&outputs).expect("no collisions must pass");
+    }
+
+    #[test]
+    fn refuse_silent_overwrite_rejects_when_any_output_already_on_disk() {
+        // A single pre-existing managed file must trip the gate, even
+        // when the rest of the outputs are fresh — pin the "any"
+        // semantics so a regression that swapped to "all" passes
+        // through a partial-rewrite scenario that would corrupt the
+        // operator's install.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let existing = tmp.path().join("svc");
+        std::fs::write(&existing, b"prior install").expect("write existing");
+        let outputs = vec![
+            output_file_at(existing),
+            output_file_at(tmp.path().join("sock")),
+        ];
+        refuse_silent_overwrite(&outputs)
+            .expect_err("any pre-existing managed file must trip the gate");
+    }
+
+    #[test]
+    fn is_credential_already_configured_returns_false_for_nonexistent_path() {
+        // The "already configured" annotation must NOT fire when the
+        // credential file is missing — operator should see the full
+        // walkthrough so they know to drop a credential.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let p = tmp.path().join("nonexistent");
+        assert!(
+            !is_credential_already_configured(&p),
+            "missing credential path must not surface as configured",
+        );
+    }
+
+    #[test]
+    fn credential_root_owned_in_user_scope_short_circuits_for_system_scope() {
+        // The root-owned annotation only applies to --user installs —
+        // --system installs run as root themselves, so the "rotate via
+        // sudo" hint is meaningless. Pin the early-return.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let p = tmp.path().join("any");
+        std::fs::write(&p, b"x").expect("write");
+        assert!(
+            !credential_root_owned_in_user_scope(&p, InstallScope::System),
+            "System scope must short-circuit before reading file metadata",
+        );
+    }
+
+    #[test]
+    fn credential_root_owned_in_user_scope_returns_false_for_missing_path() {
+        // The helper is a soft annotation, not a security check —
+        // a stat error must produce false rather than panicking.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let p = tmp.path().join("does-not-exist");
+        assert!(
+            !credential_root_owned_in_user_scope(&p, InstallScope::User),
+            "missing path must surface as not-root-owned (false)",
+        );
+    }
+
+    #[test]
+    fn ensure_static_user_if_local_mail_returns_false_when_no_local_mail() {
+        // No local_mail destinations -> no static user needed, no
+        // useradd invoked. The function must short-circuit BEFORE the
+        // useradd helper so tests pass on any host (no useradd binary
+        // assumption).
+        let created = ensure_static_user_if_local_mail(false, InstallScope::System)
+            .expect("no-local_mail branch must not error");
+        assert!(!created, "no local_mail must mean 'nothing created'");
+    }
+
+    #[test]
+    fn ensure_static_user_if_local_mail_returns_false_for_user_scope_even_with_local_mail() {
+        // --user + local_mail is rejected upstream by
+        // reject_user_plus_local_mail; this defensive branch keeps
+        // useradd from being invoked even if the upstream gate is ever
+        // bypassed. Pin the (true, User) cell of the 2x2 matrix so a
+        // regression that loosened the && to || (and started shelling
+        // out to useradd under --user) surfaces here.
+        let created = ensure_static_user_if_local_mail(true, InstallScope::User)
+            .expect("(true, User) defensive branch must not error");
+        assert!(
+            !created,
+            "(true, User) must not invoke useradd; defensive 'nothing created' path",
+        );
+    }
 }
