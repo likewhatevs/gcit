@@ -1,13 +1,17 @@
-// `gcit install` — guided 5-step setup wizard (`--dry-run` short-circuits to render-only).
+// `gcit install` — guided multi-step setup wizard (`--dry-run` short-circuits to render-only).
 //
-// Steps:
+// Steps (`run()` dispatches each into a `route_*`/per-phase helper):
 //   1. Credential walkthrough (per credential_id).
 //   2. Local mail check (warns; never fatal at install time).
 //   3. Path preview + confirmation (refuses without explicit `y`;
 //      `--non-interactive` skips the prompt for CI).
-//   4. Write files atomically + write the install manifest at
+//   4. Static `gcit` user creation when local_mail is present + scope
+//      is system (`ensure_static_user_if_local_mail`).
+//   5. Write files atomically + write the install manifest at
 //      $STATE_DIRECTORY/.install-manifest.json.
-//   5. Print post-install systemctl commands.
+//   6. Trigger systemd daemon-reload via the user session bus (or
+//      skip with a sudo hint for `--system`).
+//   7. Print post-install systemctl commands.
 //
 // `--dry-run` short-circuits after config validation: renders the
 // systemd service unit to stdout and exits 0. No credential

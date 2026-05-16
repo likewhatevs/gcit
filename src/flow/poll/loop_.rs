@@ -3,8 +3,10 @@
 // `run_with_executor` is the strategy-agnostic outer loop that wraps
 // any `PollExecutor` (production = `RealPollExecutor`, tests =
 // `ScriptedPollExecutor`). It owns sleep/jitter, the rate-bucket
-// gate, the cancel race, and the per-arm wiring into the state
-// writer + dispatcher trigger channel.
+// gate, the cancel race, and the post-poll dispatch into per-arm
+// helpers (`handle_refreshed`, `handle_unchanged`, `handle_unborn_ref`)
+// that own the state-writer and dispatcher-trigger wiring for each
+// `PollOutcome` variant.
 
 use std::time::Duration;
 
@@ -22,10 +24,6 @@ use super::executor::{PollCycleError, PollExecutor};
 use super::send::{send_trigger_then_observation, SendOutcome};
 use super::PollParams;
 
-/// Generic poll-loop driver. Production goes through `super::run`,
-/// which constructs a `RealPollExecutor`; the supervisor end-to-end
-/// test harness in `tests/poll_unborn_ref.rs` wires in a
-/// `ScriptedPollExecutor`.
 /// Result of one poll cycle's PollOutcome-handling step. `Return`
 /// short-circuits the outer loop (channel closed, cancel observed);
 /// `Continue` proceeds to the next cycle.
@@ -34,6 +32,10 @@ enum CycleAction {
     Return,
 }
 
+/// Generic poll-loop driver. Production goes through `super::run`,
+/// which constructs a `RealPollExecutor`; the supervisor end-to-end
+/// test harness in `tests/poll_unborn_ref.rs` wires in a
+/// `ScriptedPollExecutor`.
 pub async fn run_with_executor<E>(
     params: PollParams,
     executor: E,

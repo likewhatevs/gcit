@@ -212,7 +212,7 @@ pub async fn run_with_factories(
     notify_ready_or_warn();
     info!(target: "gcit::supervisor", "daemon ready");
 
-    // 15. Main select! loop.
+    // Main select! loop.
     loop {
         tokio::select! {
             _ = sighup.recv() => {
