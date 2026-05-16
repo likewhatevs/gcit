@@ -59,7 +59,7 @@ use fd_lock::RwLock as FdLock;
 use handlebars::Handlebars;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::mbox::{self, BODY_BYTE_CAP};
 use crate::config::{FireEvent, LocalMailTemplateConfig};
@@ -285,6 +285,28 @@ impl Notifier for LocalMailNotifier {
         summary: &RunSummary,
         cancel: &CancellationToken,
     ) -> Result<NotifyOutcome, NotifyError> {
+        let outcome = self.on_run_complete_inner(ctx, summary, cancel).await;
+        self.log_outcome(ctx, &outcome);
+        outcome
+    }
+}
+
+impl LocalMailNotifier {
+    /// Inner body of `on_run_complete`. Split out so the trait-method
+    /// thin wrapper can log notifier-side context on every failure
+    /// path without scattering warn!/info! emits across every
+    /// `return Err(...)` site. WARN for `Permanent` (no retry),
+    /// INFO for `Transient` (supervisor will retry); both events
+    /// carry `notifier`, `flow`, `user`, and `spool_path` so
+    /// operators reading journalctl have notifier-specific context
+    /// alongside the supervisor's `record_last_error` warn (which
+    /// carries flow / kind / body for the status surface).
+    async fn on_run_complete_inner(
+        &self,
+        ctx: &RunContext,
+        summary: &RunSummary,
+        cancel: &CancellationToken,
+    ) -> Result<NotifyOutcome, NotifyError> {
         if !self.fires_on(FireEvent::RunComplete) {
             return Ok(NotifyOutcome::Skipped {
                 reason: SkipReason::FireOnMismatch,
@@ -439,6 +461,43 @@ impl Notifier for LocalMailNotifier {
                 source: anyhow::anyhow!("spool lock not acquired within {:?}", LOCK_WAIT_DEADLINE,),
                 retry_after: None,
             }),
+        }
+    }
+
+    /// Emit notifier-side tracing context for the on-run-complete
+    /// outcome. WARN for `Permanent` (operator must intervene),
+    /// INFO for `Transient` (supervisor will retry). The supervisor's
+    /// `record_last_error` also emits at WARN for the dashboard /
+    /// status surface — that one carries the flow-level `kind` /
+    /// `body` / `retry_at` payload; this one carries the
+    /// notifier-specific spool_path + user so journalctl readers can
+    /// triage at the mail layer (which spool was attempted, which
+    /// user the mbox targets) without cross-referencing.
+    fn log_outcome(&self, ctx: &RunContext, outcome: &Result<NotifyOutcome, NotifyError>) {
+        match outcome {
+            Err(NotifyError::Permanent { source }) => {
+                warn!(
+                    target: "gcit::mail",
+                    notifier = %self.id,
+                    flow = %ctx.flow_name,
+                    user = %self.user,
+                    spool_path = %self.spool_path().display(),
+                    error = %source,
+                    "local_mail permanent failure",
+                );
+            }
+            Err(NotifyError::Transient { source, .. }) => {
+                info!(
+                    target: "gcit::mail",
+                    notifier = %self.id,
+                    flow = %ctx.flow_name,
+                    user = %self.user,
+                    spool_path = %self.spool_path().display(),
+                    error = %source,
+                    "local_mail transient failure (will retry)",
+                );
+            }
+            Ok(_) => {}
         }
     }
 }

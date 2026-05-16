@@ -25,6 +25,7 @@ use gix_hash::ObjectId;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
+use tracing_test::traced_test;
 use uuid::Uuid;
 
 use gcit::config::{FireEvent, LocalMailTemplateConfig};
@@ -457,22 +458,87 @@ fn classify_io_errors(#[case] errno: i32, #[case] expect_transient: bool) {
     );
 }
 
+/// Permanent failures emit a notifier-side WARN under target
+/// `gcit::mail` with `notifier`, `flow`, `user`, `spool_path`, and
+/// `error` fields. The supervisor's `record_last_error` emits the
+/// dashboard-level WARN with `kind`/`body`/`retry_at`; this one
+/// gives journalctl readers the notifier-specific context (which
+/// spool was attempted, which user the mbox targets) without
+/// cross-referencing.
+///
+/// Drives the ENOENT path (absent spool -> `Permanent` via
+/// `map_io_error`) because it's the same path the supervisor
+/// would record under `last_error.kind = "notifier_failed"`.
 #[tokio::test]
-#[ignore = "needs tracing-subscriber capture rig (see mail_body_cap.rs warn-log test for the pattern)"]
+#[traced_test]
 async fn permanent_error_logged_at_warn_with_flow_context() {
-    // Pin the structured warn event for permanent failures —
-    // dashboards filter on the field set. Tracing-subscriber capture
-    // pattern is established in mail_body_cap.rs but not yet
-    // adapted here.
+    let tmp = TempDir::new().expect("tempdir");
+    let user = "u";
+    let n = notifier_for(tmp.path(), user);
+    let err = n
+        .on_run_complete(&ctx(), &summary_success(), &CancellationToken::new())
+        .await
+        .expect_err("absent spool must surface as Err");
+    assert!(matches!(err, NotifyError::Permanent { .. }));
+
+    // tracing-subscriber renders `Display`-formatted fields as
+    // `name=value` without surrounding quotes. Pin the field set
+    // dashboards filter on, plus the literal message body so the
+    // assertion only fires on the canonical permanent-failure event.
+    assert!(
+        logs_contain("local_mail permanent failure"),
+        "permanent failure must emit the canonical message body",
+    );
+    assert!(
+        logs_contain("flow=ci-flow"),
+        "permanent emit must carry the flow correlation key",
+    );
+    assert!(
+        logs_contain(&format!("user={user}")),
+        "permanent emit must carry the spool user",
+    );
+    let spool_path = tmp.path().join(user);
+    assert!(
+        logs_contain(&format!("spool_path={}", spool_path.display())),
+        "permanent emit must name the spool path",
+    );
 }
 
+/// Transient failures emit a notifier-side INFO under target
+/// `gcit::mail` with the same field set as the permanent WARN — the
+/// supervisor's record_last_error still emits the dashboard-level
+/// WARN after backon exhausts the retries. Drives the pre-cancelled
+/// token path (early-bail `Transient` at on_run_complete entry).
+///
+/// The "WARN after retry exhausts" half of the original test
+/// description belongs at the supervisor harness — that loop owns the
+/// retry budget; the notifier never re-runs internally.
 #[tokio::test]
-#[ignore = "needs tracing-subscriber capture rig + retry-loop scaffold"]
-async fn transient_error_logged_at_info_then_warn_after_retry() {
-    // Initial transient → INFO; after backon exhausts → WARN. The
-    // retry loop is owned by the supervisor (not the notifier), so
-    // this requires supervisor scaffolding in addition to the
-    // capture rig.
+#[traced_test]
+async fn transient_error_logged_at_info_with_flow_context() {
+    let tmp = TempDir::new().expect("tempdir");
+    let user = "u";
+    let n = notifier_for(tmp.path(), user);
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let err = n
+        .on_run_complete(&ctx(), &summary_success(), &cancel)
+        .await
+        .expect_err("pre-cancelled token must surface as Err");
+    assert!(matches!(err, NotifyError::Transient { .. }));
+
+    assert!(
+        logs_contain("local_mail transient failure"),
+        "transient failure must emit the canonical message body",
+    );
+    assert!(
+        logs_contain("flow=ci-flow"),
+        "transient emit must carry the flow correlation key",
+    );
+    assert!(
+        logs_contain(&format!("user={user}")),
+        "transient emit must carry the spool user",
+    );
 }
 
 #[tokio::test]
