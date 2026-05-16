@@ -109,12 +109,7 @@ pub async fn run_with_factories(
         listen_fds,
     } = params;
 
-    // 1. Load + validate the config. A failure here is fatal — the
-    // operator must fix it before the daemon can start.
-    let initial_config = match crate::config::load(&config_path) {
-        Ok(c) => Arc::new(c),
-        Err(errs) => return Err(DaemonError::Config(errs)),
-    };
+    let initial_config = load_initial_config(&config_path)?;
     info!(
         target: "gcit::supervisor",
         flows = initial_config.flow.len(),
@@ -122,16 +117,12 @@ pub async fn run_with_factories(
         "config loaded",
     );
 
-    // 2. Acquire the single-instance lock BEFORE loading state.
-    // The exclusive flock on $RUNTIME_DIRECTORY/gcit.lock prevents
-    // a second gcit instance from racing on state.json or
-    // re-dispatching the same SHA. Held for the daemon's lifetime
-    // — the guard is dropped automatically when `run()` returns.
-    //
-    // The lock acquire happens BEFORE state load so a second
-    // instance fails fast with a clear error instead of partly
-    // initialising and then colliding on state-writer mpsc /
-    // state.json.
+    // Acquire the single-instance lock BEFORE loading state. The
+    // exclusive flock prevents a second gcit instance from racing on
+    // state.json or re-dispatching the same SHA. Held for the
+    // daemon's lifetime — guard drops automatically when `run()`
+    // returns. The borrow ties `_instance_lock_guard` to
+    // `instance_lock`, so both must live in this function's frame.
     let lock_path = state::lock_path().map_err(DaemonError::State)?;
     let mut instance_lock =
         state::open_instance_lock_file(&lock_path).map_err(DaemonError::State)?;
@@ -155,95 +146,27 @@ pub async fn run_with_factories(
         "instance lock acquired",
     );
 
-    // 3. Load the persistent state (state.json).
-    let state_path = state::path().map_err(DaemonError::State)?;
-    let initial_state: State = state::load_or_init(&state_path).map_err(DaemonError::State)?;
+    let StateWriterHandles {
+        state_tx,
+        state_mirror,
+        writer_handle,
+    } = setup_state_writer()?;
 
-    // 3. State writer + status mirror. The writer thread owns the
-    // canonical State; `state_mirror` holds a clone refreshed after
-    // every successful disk persist. Status reads borrow from the
-    // mirror under a stdlib Mutex — no cross-runtime contention
-    // because the mirror is only locked for the duration of a clone
-    // or a single read.
-    let (state_tx, state_rx) = mpsc::channel::<StateUpdate>(STATE_QUEUE);
-    let state_mirror: Arc<StdMutex<State>> = Arc::new(StdMutex::new(State::default()));
-    let writer_handle = state::spawn_with_mirror(
-        initial_state,
-        state_path,
-        state_rx,
-        Arc::clone(&state_mirror),
-    );
-
-    // 4. The watch carries the live `Arc<Config>` so the supervisor's
-    // panic-respawn path reads the current config without holding a
-    // lock or threading the value through every callsite. The watch
-    // is NOT used for per-flow propagation (changed flows are
-    // cancelled and respawned during reload, while unchanged flows
-    // keep their existing pair alive); it remains because the
-    // panic-respawn path and the control handler both need to read
-    // "what config is the supervisor currently running" without an
-    // extra channel.
     let (config_watch_tx, _config_watch_rx) = watch::channel(Arc::clone(&initial_config));
     let config_watch_tx = Arc::new(config_watch_tx);
 
-    // 5. Per-credential clients + rate buckets + rate-limit pollers.
-    // Cached across config reloads so SIGHUP doesn't re-issue
-    // /rate_limit per credential.
-    //
-    // The shared HTTP client is built once here from
-    // `config.http.request_timeout` and threaded through the credential
-    // pool. Octocrab manages its own client; `reqwest::Client` is
-    // shared by the grokmirror polling strategy.
-    let shared_reqwest = Arc::new(
-        reqwest::Client::builder()
-            .timeout(initial_config.http.request_timeout)
-            .build()
-            .map_err(|e| DaemonError::HttpClient(e.to_string()))?,
-    );
-    let credential_pool = Arc::new(RwLock::new(CredentialPool::with_config_path(&config_path)));
+    let (shared_reqwest, credential_pool) =
+        build_shared_http_resources(&initial_config, &config_path)?;
 
-    // 6. Cancellation tree: root cancel signals daemon shutdown;
-    // per-flow children let us cancel a single flow during config
-    // reload.
     let root_cancel = CancellationToken::new();
-
-    // 7. Last-error tracker: keyed by flow name. Surfaced via
-    // `gcit status` and updated by per-flow tasks on a panic /
-    // permanent error.
     let last_errors = Arc::new(Mutex::new(BTreeMap::<String, FlowLastError>::new()));
-
-    // 8. Hostname for local_mail notifiers — read once at boot.
-    // `read_hostname_or_default` is best-effort and logs a WARN on
-    // /etc/hostname read failure; subsequent reads would observe the
-    // same value.
     let hostname = Arc::new(mail::read_hostname_or_default());
 
-    // 9. Respawn channel. Panic-watcher tasks (spawned per panicked
-    // flow with a RESPAWN_DELAY sleep + a request enqueue) feed the
-    // supervisor's select! loop. This keeps SIGTERM/SIGHUP/control
-    // commands responsive during the 30-second respawn window: the
-    // sleep happens in a separate task, never inline in the select!
-    // arm.
     let (respawn_tx, mut respawn_rx) =
         mpsc::channel::<super::respawn::RespawnRequest>(RESPAWN_QUEUE);
 
-    // 10. Build per-flow notifier vectors + dispatch wiring, then spawn.
-    // `respawning_flows` tracks flows that have observed a panic and
-    // have a respawn timer in flight but have not yet been respawned.
-    // Distinct from `registry.handles` so a clean exit of one role
-    // does not silently mark the surviving panicking sibling as
-    // "already-respawning" and skip the respawn (the bug fixed by
-    // tracking respawn state explicitly rather than inferring it
-    // from handle membership).
     let mut flow_join_set: JoinSet<FlowExit> = JoinSet::new();
-    // `FlowRegistry` bundles handles + respawning_flows + pending_exits
-    // — see the FlowRegistry doc for the per-collection invariants.
     let mut registry = FlowRegistry::new();
-    // `SpawnContext` bundles every cross-cutting input the per-flow
-    // spawn path needs: shared transports, per-flow trackers, and the
-    // task-building factories. Production builds production_*_factory()
-    // here; integration tests reach `run_with_factories` to inject
-    // scripted factories that wrap `flow::{poll,dispatcher}::run_with_executor`.
     let spawn_ctx = SpawnContext {
         credential_pool: Arc::clone(&credential_pool),
         shared_reqwest: Arc::clone(&shared_reqwest),
@@ -263,8 +186,6 @@ pub async fn run_with_factories(
     )
     .await;
 
-    // 11. Bring up the control socket. Look for a `control` listen-fd;
-    // fall back to binding `default_control_socket` if none.
     let control_listener = bind_control_listener(&listen_fds, &default_control_socket)?;
     let (control_cmd_tx, mut control_cmd_rx) =
         mpsc::channel::<ControlCommand>(CONTROL_COMMAND_QUEUE);
@@ -284,25 +205,11 @@ pub async fn run_with_factories(
         }
     });
 
-    // 12. Watchdog. Only fires when running under a systemd unit with
-    // WatchdogSec= set — otherwise sd_notify::watchdog_enabled returns
-    // None and we skip the spawn.
     let watchdog_handle = spawn_watchdog(root_cancel.clone());
 
-    // 13. Signal handlers: SIGHUP (reload), SIGTERM, SIGINT.
-    let mut sighup =
-        signal(SignalKind::hangup()).map_err(|e| DaemonError::SignalSetup(e.to_string()))?;
-    let mut sigterm =
-        signal(SignalKind::terminate()).map_err(|e| DaemonError::SignalSetup(e.to_string()))?;
-    let mut sigint =
-        signal(SignalKind::interrupt()).map_err(|e| DaemonError::SignalSetup(e.to_string()))?;
+    let (mut sighup, mut sigterm, mut sigint) = install_signal_handlers()?;
 
-    // 14. Ready. Notify systemd we're up. Failures here are non-fatal —
-    // when running outside systemd, $NOTIFY_SOCKET is unset and
-    // sd_notify::notify is a no-op.
-    if let Err(e) = sd_notify::notify(&[NotifyState::Ready]) {
-        warn!(target: "gcit::supervisor", error = %e, "sd_notify Ready failed");
-    }
+    notify_ready_or_warn();
     info!(target: "gcit::supervisor", "daemon ready");
 
     // 15. Main select! loop.
@@ -361,19 +268,9 @@ pub async fn run_with_factories(
         }
     }
 
-    // 16. Shutdown sequence:
-    //     Stopping -> root.cancel() -> await flows -> drop(state_tx)
-    //     -> writer.join().
-    if let Err(e) = sd_notify::notify(&[NotifyState::Stopping]) {
-        warn!(target: "gcit::supervisor", error = %e, "sd_notify Stopping failed");
-    }
+    notify_stopping_or_warn();
     root_cancel.cancel();
-    info!(target: "gcit::supervisor", "awaiting per-flow tasks");
-    while let Some(joined) = flow_join_set.join_next().await {
-        if let Err(e) = joined {
-            warn!(target: "gcit::supervisor", error = %e, "flow task join error during shutdown");
-        }
-    }
+    drain_flows_on_shutdown(&mut flow_join_set).await;
     info!(target: "gcit::supervisor", "awaiting control server");
     let _ = control_handle.await;
     if let Some(h) = watchdog_handle {
@@ -381,11 +278,10 @@ pub async fn run_with_factories(
     }
     // Drop the SpawnContext BEFORE the local state_tx so the
     // writer's `blocking_recv_many` can observe `Disconnected` and
-    // exit. SpawnContext owns its own `state_tx.clone()` (cloned in
-    // step 10 above so reload / respawn can hand fresh clones to new
-    // generations); leaving it live across `drop(state_tx)` would
-    // pin the writer forever — every state_tx clone must drop before
-    // the channel signals disconnect.
+    // exit. SpawnContext owns its own `state_tx.clone()`; leaving it
+    // live across `drop(state_tx)` would pin the writer forever —
+    // every state_tx clone must drop before the channel signals
+    // disconnect.
     drop(spawn_ctx);
     info!(target: "gcit::supervisor", "dropping state_tx; awaiting writer drain");
     drop(state_tx);
@@ -394,6 +290,119 @@ pub async fn run_with_factories(
     }
     info!(target: "gcit::supervisor", "shutdown complete");
     Ok(())
+}
+
+/// Load + validate the daemon config. A failure here is fatal — the
+/// operator must fix it before the daemon can start.
+fn load_initial_config(
+    config_path: &std::path::Path,
+) -> Result<Arc<crate::config::Config>, DaemonError> {
+    match crate::config::load(config_path) {
+        Ok(c) => Ok(Arc::new(c)),
+        Err(errs) => Err(DaemonError::Config(errs)),
+    }
+}
+
+/// Producer mpsc + status-mirror handle + writer JoinHandle returned
+/// by `setup_state_writer`. Bundled into a struct rather than a 3-tuple
+/// because the tuple form trips clippy's `type_complexity` lint.
+struct StateWriterHandles {
+    state_tx: mpsc::Sender<StateUpdate>,
+    state_mirror: Arc<StdMutex<State>>,
+    writer_handle: std::thread::JoinHandle<()>,
+}
+
+/// Resolve `$STATE_DIRECTORY/state.json`, load the persisted state, and
+/// spawn the writer thread. The writer owns the canonical State; status
+/// reads borrow from the mirror under a stdlib Mutex.
+fn setup_state_writer() -> Result<StateWriterHandles, DaemonError> {
+    let state_path = state::path().map_err(DaemonError::State)?;
+    let initial_state: State = state::load_or_init(&state_path).map_err(DaemonError::State)?;
+    let (state_tx, state_rx) = mpsc::channel::<StateUpdate>(STATE_QUEUE);
+    let state_mirror: Arc<StdMutex<State>> = Arc::new(StdMutex::new(State::default()));
+    let writer_handle = state::spawn_with_mirror(
+        initial_state,
+        state_path,
+        state_rx,
+        Arc::clone(&state_mirror),
+    );
+    Ok(StateWriterHandles {
+        state_tx,
+        state_mirror,
+        writer_handle,
+    })
+}
+
+/// Build the shared `reqwest::Client` (sized to `http.request_timeout`)
+/// and the per-credential pool. Both Arcs are passed into the
+/// SpawnContext so per-flow tasks share one HTTP client across the
+/// whole daemon. The credential pool survives SIGHUP reloads — the
+/// reload path invalidates per-credential entries selectively.
+fn build_shared_http_resources(
+    config: &crate::config::Config,
+    config_path: &std::path::Path,
+) -> Result<(Arc<reqwest::Client>, Arc<RwLock<CredentialPool>>), DaemonError> {
+    let shared_reqwest = Arc::new(
+        reqwest::Client::builder()
+            .timeout(config.http.request_timeout)
+            .build()
+            .map_err(|e| DaemonError::HttpClient(e.to_string()))?,
+    );
+    let credential_pool = Arc::new(RwLock::new(CredentialPool::with_config_path(config_path)));
+    Ok((shared_reqwest, credential_pool))
+}
+
+/// Install SIGHUP / SIGTERM / SIGINT handlers. Returns the three
+/// `tokio::signal::unix::Signal` futures the main select! loop polls.
+/// All three must succeed at boot — a daemon that can't observe
+/// SIGTERM cannot shut down cleanly.
+fn install_signal_handlers() -> Result<
+    (
+        tokio::signal::unix::Signal,
+        tokio::signal::unix::Signal,
+        tokio::signal::unix::Signal,
+    ),
+    DaemonError,
+> {
+    let sighup =
+        signal(SignalKind::hangup()).map_err(|e| DaemonError::SignalSetup(e.to_string()))?;
+    let sigterm =
+        signal(SignalKind::terminate()).map_err(|e| DaemonError::SignalSetup(e.to_string()))?;
+    let sigint =
+        signal(SignalKind::interrupt()).map_err(|e| DaemonError::SignalSetup(e.to_string()))?;
+    Ok((sighup, sigterm, sigint))
+}
+
+/// Notify systemd of Ready. Failures are non-fatal — when running
+/// outside systemd, $NOTIFY_SOCKET is unset and sd_notify::notify is
+/// a no-op.
+fn notify_ready_or_warn() {
+    if let Err(e) = sd_notify::notify(&[NotifyState::Ready]) {
+        warn!(target: "gcit::supervisor", error = %e, "sd_notify Ready failed");
+    }
+}
+
+/// Notify systemd of Stopping. Same failure semantics as
+/// `notify_ready_or_warn` — non-fatal, log on failure.
+fn notify_stopping_or_warn() {
+    if let Err(e) = sd_notify::notify(&[NotifyState::Stopping]) {
+        warn!(target: "gcit::supervisor", error = %e, "sd_notify Stopping failed");
+    }
+}
+
+/// Drain every remaining per-flow task after `root_cancel` has fired.
+/// Each task either observes cancellation via its CancellationToken
+/// arm or finishes its in-flight cycle naturally; the JoinSet drains
+/// to empty before this returns. Join errors are logged but not
+/// propagated — a panicked flow at this stage can't change the
+/// shutdown outcome.
+async fn drain_flows_on_shutdown(flow_join_set: &mut JoinSet<FlowExit>) {
+    info!(target: "gcit::supervisor", "awaiting per-flow tasks");
+    while let Some(joined) = flow_join_set.join_next().await {
+        if let Err(e) = joined {
+            warn!(target: "gcit::supervisor", error = %e, "flow task join error during shutdown");
+        }
+    }
 }
 
 /// Spawn the watchdog notifier task. Returns `None` when the unit
