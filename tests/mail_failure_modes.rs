@@ -375,29 +375,11 @@ async fn lock_contention_5_sec_deadline_returns_transient() {
     holder.join().expect("holder thread must join cleanly");
 }
 
-#[tokio::test]
-#[ignore = "needs production change to expand map_io_error or a test seam for raw_os_error injection"]
-async fn enospc_returns_transient_for_backon_retry() {
-    // Simulating ENOSPC requires either a tmpfs mount with size
-    // cap (root-only) or an injected `io::Error::from_raw_os_error(28)`
-    // through a test seam. Production `map_io_error` already routes
-    // unknown io::ErrorKind to Transient, so the contract holds —
-    // pinning it requires the seam.
-}
-
-#[tokio::test]
-#[ignore = "needs test seam to inject io::Error::from_raw_os_error(5)"]
-async fn eio_returns_transient() {
-    // Same shape as ENOSPC — needs raw_os_error injection.
-}
-
-#[tokio::test]
-#[ignore = "needs test seam to inject io::Error::from_raw_os_error(16)"]
-async fn ebusy_returns_transient() {
-    // EBUSY can occur on mount-point during unmount. Treat as
-    // Transient — operator's mount-state issue is presumably
-    // self-resolving.
-}
+// Per-errno classification (ENOSPC, EIO, EBUSY, EINTR, EAGAIN, plus
+// the Permanent arms) is pinned by the `classify_io_errors` rstest
+// below — `gcit::mail::map_io_error(io::Error::from_raw_os_error(N), path)`
+// is the doc-hidden public seam that calls the production classifier
+// directly without booting the spool I/O path.
 
 #[rstest]
 // Permanent: no operator-free retry resolves these.
