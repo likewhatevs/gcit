@@ -32,7 +32,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::config::{ActionConfig, Config, FlowConfig};
-use crate::git::rate_bucket::RateBucket;
 use crate::state::{State, StateUpdate};
 
 use super::credentials::CredentialPool;
@@ -213,11 +212,80 @@ pub(super) async fn spawn_flow(
     let flow_cancel = ctx.root_cancel.child_token();
     let (trigger_tx, trigger_rx) = mpsc::channel::<TriggerSignal>(TRIGGER_QUEUE);
 
-    let action_credential_id = match &flow.action {
-        ActionConfig::GithubWorkflowDispatch { credential_id, .. } => credential_id.clone(),
+    let notifiers = match build_flow_notifiers_or_record(flow, config, ctx).await {
+        Some(n) => n,
+        None => return,
     };
 
-    let notifiers = match build_notifiers(
+    let cred_resources = match acquire_flow_credentials_or_record(flow, config, ctx).await {
+        Some(r) => r,
+        None => return,
+    };
+
+    let effective = EffectivePoll::compute(
+        &config.poll,
+        &flow.poll,
+        crate::git::auto_detect(&flow.source.url),
+    );
+
+    let poll_params = build_poll_params(flow, ctx, effective, &cred_resources);
+    let initial_last_sha = read_persisted_last_sha(&ctx.state_mirror, &flow.name);
+    let initial_last_dispatched_at =
+        read_persisted_last_dispatched_at(&ctx.state_mirror, &flow.name);
+
+    spawn_poll_task(
+        join_set,
+        ctx,
+        poll_params,
+        initial_last_sha,
+        initial_last_dispatched_at,
+        trigger_tx.clone(),
+        flow_cancel.clone(),
+        flow.name.clone(),
+    );
+
+    let dispatcher_params = build_dispatcher_params(flow, &cred_resources, effective, notifiers);
+    spawn_dispatcher_task(
+        join_set,
+        ctx,
+        dispatcher_params,
+        trigger_rx,
+        flow_cancel.clone(),
+        flow.name.clone(),
+    );
+
+    registry.handles.insert(
+        flow.name.clone(),
+        FlowHandle {
+            cancel: flow_cancel,
+            trigger_tx,
+        },
+    );
+    // Track the new pair (poll + dispatcher) so
+    // `handle_respawn_request` can gate the next respawn on both
+    // old-gen tasks exiting the JoinSet. The count accumulates across
+    // overlapping generations: an old-gen pair contributing 2 plus a
+    // fresh respawn contributing 2 sums to 4, and the pending-exits
+    // gate only opens once all 4 exits land.
+    *registry.pending_exits.entry(flow.name.clone()).or_insert(0) += 2;
+    info!(
+        target: "gcit::supervisor",
+        flow = %flow.name,
+        "flow spawned",
+    );
+}
+
+/// Build the per-flow notifier vector. On failure records a
+/// `notifier_setup` last_error (with the flow-name prefix so
+/// `gcit status` / journald show which flow is blocked when several
+/// share a credential) and returns None — the caller short-circuits
+/// the spawn.
+async fn build_flow_notifiers_or_record(
+    flow: &FlowConfig,
+    config: &Config,
+    ctx: &SpawnContext,
+) -> Option<Vec<Arc<dyn crate::flow::dispatcher::DynNotifier>>> {
+    match build_notifiers(
         flow,
         &ctx.credential_pool,
         &ctx.hostname,
@@ -225,18 +293,27 @@ pub(super) async fn spawn_flow(
     )
     .await
     {
-        Ok(n) => n,
+        Ok(n) => Some(n),
         Err(e) => {
-            // Prefix with the flow name so `gcit status` / journald
-            // show which flow is blocked when several share a credential.
-            return record_setup_failure_and_skip(ctx, &flow.name, "notifier_setup", &e).await;
+            record_setup_failure_and_skip(ctx, &flow.name, "notifier_setup", &e).await;
+            None
         }
-    };
+    }
+}
 
-    // Acquire (or build) the GitHub credential machinery. The pool
-    // owns the rate-limit poller's CancellationToken (child of root
-    // cancel) so daemon shutdown unwinds it.
-    let cred_resources = match ctx
+/// Acquire (or build) the GitHub credential machinery. The pool owns
+/// the rate-limit poller's CancellationToken (child of root cancel)
+/// so daemon shutdown unwinds it. On failure records a `credential`
+/// last_error and returns None.
+async fn acquire_flow_credentials_or_record(
+    flow: &FlowConfig,
+    config: &Config,
+    ctx: &SpawnContext,
+) -> Option<Arc<super::credentials::GithubCredentialResources>> {
+    let action_credential_id = match &flow.action {
+        ActionConfig::GithubWorkflowDispatch { credential_id, .. } => credential_id.clone(),
+    };
+    match ctx
         .credential_pool
         .write()
         .await
@@ -248,54 +325,41 @@ pub(super) async fn spawn_flow(
         )
         .await
     {
-        Ok(r) => r,
+        Ok(r) => Some(r),
         Err(e) => {
-            return record_setup_failure_and_skip(ctx, &flow.name, "credential", &e.to_string())
-                .await;
+            record_setup_failure_and_skip(ctx, &flow.name, "credential", &e.to_string()).await;
+            None
         }
-    };
+    }
+}
 
-    let strategy = crate::git::auto_detect(&flow.source.url);
-    let effective = EffectivePoll::compute(&config.poll, &flow.poll, strategy);
-
-    // Source-side rate bucket: deferred to v1. Per-flow jitter paces
-    // the source side.
-    let source_rate_bucket: Option<Arc<RateBucket>> = None;
-
-    let initial_last_sha = read_persisted_last_sha(&ctx.state_mirror, &flow.name);
-    let initial_last_dispatched_at =
-        read_persisted_last_dispatched_at(&ctx.state_mirror, &flow.name);
-
-    let poll_params = PollParams {
+fn build_poll_params(
+    flow: &FlowConfig,
+    ctx: &SpawnContext,
+    effective: EffectivePoll,
+    cred_resources: &Arc<super::credentials::GithubCredentialResources>,
+) -> PollParams {
+    PollParams {
         flow_name: flow.name.clone(),
         url: flow.source.url.clone(),
         ref_name: flow.source.ref_name.clone(),
         effective_poll: effective,
-        rate_bucket: source_rate_bucket,
+        // Source-side rate bucket: deferred to v1. Per-flow jitter
+        // paces the source side.
+        rate_bucket: None,
         octo: Some(cred_resources.octocrab.clone()),
         reqwest: Some(cred_resources.reqwest.clone()),
         last_errors: Arc::clone(&ctx.last_errors),
-    };
-    let poll_state_tx = ctx.state_tx.clone();
-    let poll_trigger_tx = trigger_tx.clone();
-    let poll_cancel = flow_cancel.clone();
-    let poll_flow = flow.name.clone();
-    let poll_factory = Arc::clone(&ctx.poll_task_factory);
-    join_set.spawn(async move {
-        let result = AssertUnwindSafe((poll_factory)(
-            poll_params,
-            initial_last_sha,
-            initial_last_dispatched_at,
-            poll_state_tx,
-            poll_trigger_tx,
-            poll_cancel,
-        ))
-        .catch_unwind()
-        .await;
-        flow_exit_from_result(result, poll_flow, FlowRole::Poll)
-    });
+    }
+}
 
-    let dispatcher_params = FlowDispatchParams {
+fn build_dispatcher_params(
+    flow: &FlowConfig,
+    cred_resources: &Arc<super::credentials::GithubCredentialResources>,
+    effective: EffectivePoll,
+    notifiers: Vec<Arc<dyn crate::flow::dispatcher::DynNotifier>>,
+) -> FlowDispatchParams {
+    FlowDispatchParams {
         flow_name: flow.name.clone(),
         flow_description: flow.description.clone(),
         url: flow.source.url.clone(),
@@ -307,44 +371,67 @@ pub(super) async fn spawn_flow(
         rate_limit: Arc::clone(&cred_resources.rate_limit),
         job_interval: effective.job_interval,
         notifiers,
-    };
-    let dispatcher_state_tx = ctx.state_tx.clone();
-    let dispatcher_cancel = flow_cancel.clone();
-    let dispatcher_flow = flow.name.clone();
-    let dispatcher_last_errors = Arc::clone(&ctx.last_errors);
-    let dispatch_factory = Arc::clone(&ctx.dispatch_task_factory);
+    }
+}
+
+/// Spawn the per-flow poll task. The future is wrapped in
+/// `AssertUnwindSafe(...).catch_unwind()` so a panic surfaces as
+/// `FlowExit { panic: Some, role: FlowRole::Poll }` on the JoinSet
+/// rather than tearing down the whole supervisor.
+#[allow(clippy::too_many_arguments)]
+fn spawn_poll_task(
+    join_set: &mut JoinSet<FlowExit>,
+    ctx: &SpawnContext,
+    poll_params: PollParams,
+    initial_last_sha: Option<gix_hash::ObjectId>,
+    initial_last_dispatched_at: Option<chrono::DateTime<chrono::Utc>>,
+    trigger_tx: mpsc::Sender<TriggerSignal>,
+    flow_cancel: tokio_util::sync::CancellationToken,
+    flow_name: String,
+) {
+    let state_tx = ctx.state_tx.clone();
+    let factory = Arc::clone(&ctx.poll_task_factory);
     join_set.spawn(async move {
-        let result = AssertUnwindSafe((dispatch_factory)(
-            dispatcher_params,
-            trigger_rx,
-            dispatcher_state_tx,
-            dispatcher_last_errors,
-            dispatcher_cancel,
+        let result = AssertUnwindSafe((factory)(
+            poll_params,
+            initial_last_sha,
+            initial_last_dispatched_at,
+            state_tx,
+            trigger_tx,
+            flow_cancel,
         ))
         .catch_unwind()
         .await;
-        flow_exit_from_result(result, dispatcher_flow, FlowRole::Dispatcher)
+        flow_exit_from_result(result, flow_name, FlowRole::Poll)
     });
+}
 
-    registry.handles.insert(
-        flow.name.clone(),
-        FlowHandle {
-            cancel: flow_cancel,
-            trigger_tx,
-        },
-    );
-    // Track the new pair (poll + dispatcher) so
-    // `handle_respawn_request` can gate the next respawn on both
-    // old-gen tasks exiting the JoinSet. The count accumulates
-    // across overlapping generations: an old-gen pair contributing 2
-    // plus a fresh respawn contributing 2 sums to 4, and the
-    // pending-exits gate only opens once all 4 exits land.
-    *registry.pending_exits.entry(flow.name.clone()).or_insert(0) += 2;
-    info!(
-        target: "gcit::supervisor",
-        flow = %flow.name,
-        "flow spawned",
-    );
+/// Spawn the per-flow dispatcher task. Same catch_unwind wrap as the
+/// poll task above so a panic surfaces as `FlowExit { panic: Some,
+/// role: FlowRole::Dispatcher }`.
+fn spawn_dispatcher_task(
+    join_set: &mut JoinSet<FlowExit>,
+    ctx: &SpawnContext,
+    dispatcher_params: FlowDispatchParams,
+    trigger_rx: mpsc::Receiver<TriggerSignal>,
+    flow_cancel: tokio_util::sync::CancellationToken,
+    flow_name: String,
+) {
+    let state_tx = ctx.state_tx.clone();
+    let last_errors = Arc::clone(&ctx.last_errors);
+    let factory = Arc::clone(&ctx.dispatch_task_factory);
+    join_set.spawn(async move {
+        let result = AssertUnwindSafe((factory)(
+            dispatcher_params,
+            trigger_rx,
+            state_tx,
+            last_errors,
+            flow_cancel,
+        ))
+        .catch_unwind()
+        .await;
+        flow_exit_from_result(result, flow_name, FlowRole::Dispatcher)
+    });
 }
 
 /// Record a spawn-time setup failure (credential or notifier_setup)
