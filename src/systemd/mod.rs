@@ -5,9 +5,11 @@
 // boundary so `pub(crate)` is insufficient.
 
 pub mod reload;
+pub mod socket;
 pub mod unit;
 
 pub use reload::{trigger_daemon_reload, ReloadOutcome};
+pub use socket::{accept_control_socket, accept_control_socket_from_fds, AcceptError};
 pub use unit::{
     install_paths, render_service_unit, render_socket_unit, InstallPaths, InstallScope,
 };

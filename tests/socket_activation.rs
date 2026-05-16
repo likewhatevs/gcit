@@ -21,36 +21,45 @@
 // socket path. Real LISTEN_FDS inheritance is gated SYSTEMD_TESTS=1
 // in journey/socket_activation.sh.
 
-use std::os::unix::net::UnixDatagram;
+use std::os::unix::fs::FileTypeExt;
 use tempfile::TempDir;
 
-#[test]
-#[ignore = "requires gcit::systemd::accept_control_socket (not yet implemented)"]
-fn no_listen_fds_falls_back_to_bind() {
-    let _dir = TempDir::new().unwrap();
+use gcit::systemd::accept_control_socket;
 
-    // LISTEN_PID unset means listen_fds() returns Ok(empty iterator).
-    // The daemon must then fall back to UnixListener::bind on a known
-    // path under $RUNTIME_DIRECTORY/gcit/control.sock.
-    //
-    // env::remove_var is unsafe and not thread-safe; this binary holds
-    // exactly one #[test] so no other thread runs.
+/// LISTEN_PID unset means listen_fds() returns Ok(empty iterator).
+/// `accept_control_socket(path)` must then fall back to binding the
+/// supplied path as a fresh unix-domain socket. Pin both the negative
+/// case (sd_notify::listen_fds is empty under our env) and the
+/// positive case (the path materialises as a socket).
+///
+/// `env::remove_var` is unsafe and not thread-safe; this binary holds
+/// exactly one `#[test]` so no other thread races us.
+#[tokio::test(flavor = "current_thread")]
+async fn no_listen_fds_falls_back_to_bind() {
+    let dir = TempDir::new().unwrap();
+    let socket_path = dir.path().join("control.sock");
+
     unsafe {
         std::env::remove_var("LISTEN_PID");
         std::env::remove_var("LISTEN_FDS");
         std::env::remove_var("LISTEN_FDNAMES");
     }
 
-    // TODO:
-    //   let listener = gcit::systemd::accept_control_socket(tmp_dir.path()).unwrap();
-    //   // Asserts the daemon bound a UnixListener at the fallback path
-    //   // and listen_fds_with_names() returned empty.
-    //
-    // Negative case proven by absence: if listen_fds_with_names() returned
-    // a non-empty iterator while LISTEN_PID was unset, sd-notify is broken.
-
-    // sanity: confirm sd-notify behaves as documented in our environment.
+    // Negative case: confirm sd-notify reports no inherited fds in
+    // this environment, proving the test is exercising the fallback
+    // arm rather than masking a misconfigured listen_fds return.
     let fds = sd_notify::listen_fds().expect("listen_fds must not error when env unset");
     assert_eq!(fds.len(), 0, "fallback path requires empty listen_fds");
-    let _ = UnixDatagram::unbound(); // smoke-link sanity
+
+    // Positive case: accept_control_socket reads listen-fds-with-names
+    // internally, sees the empty iterator, and falls back to
+    // UnixListener::bind on the supplied path.
+    let listener = accept_control_socket(&socket_path).expect("fallback bind must succeed");
+    let meta = std::fs::metadata(&socket_path).expect("stat the bound path");
+    assert!(
+        meta.file_type().is_socket(),
+        "fallback bind must produce a unix-domain socket; got file_type={:?}",
+        meta.file_type(),
+    );
+    drop(listener);
 }

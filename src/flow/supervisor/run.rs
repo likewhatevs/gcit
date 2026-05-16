@@ -13,7 +13,7 @@
 // text rather than a `{:?}` debug dump.
 
 use std::collections::BTreeMap;
-use std::os::unix::io::{FromRawFd, RawFd};
+use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -436,50 +436,20 @@ fn spawn_watchdog(cancel: CancellationToken) -> Option<tokio::task::JoinHandle<(
     }))
 }
 
-/// Bind the control socket. Prefers a `control`-named listen-fd from
-/// systemd; falls back to binding `default_control_socket` directly.
+/// Bind the control socket. Thin adapter over
+/// `gcit::systemd::accept_control_socket_from_fds` that translates
+/// the systemd-level `AcceptError` into the supervisor's
+/// `DaemonError::ControlListener` so the boot path's `?` operator
+/// surfaces a single error type. The acceptance logic itself
+/// (inherited fd vs fallback bind, stale-file probe, AlreadyListening
+/// rejection) lives in `src/systemd/socket.rs` so a unit test can
+/// pin it without spinning the whole supervisor.
 fn bind_control_listener(
     listen_fds: &[(RawFd, String)],
     default_path: &std::path::Path,
 ) -> Result<UnixListener, DaemonError> {
-    if let Some((fd, _name)) = listen_fds.iter().find(|(_, name)| name == "control") {
-        // Convert the inherited fd. SAFETY: systemd hands us an
-        // O_CLOEXEC fd that we now own; from_raw_fd takes ownership.
-        let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(*fd) };
-        std_listener
-            .set_nonblocking(true)
-            .map_err(|e| DaemonError::ControlListener(e.to_string()))?;
-        UnixListener::from_std(std_listener)
-            .map_err(|e| DaemonError::ControlListener(e.to_string()))
-    } else {
-        // Bind a fresh socket. Used in foreground mode (gcit run
-        // outside systemd) and in tests.
-        if let Some(parent) = default_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| DaemonError::ControlListener(e.to_string()))?;
-        }
-        // If a socket file is already at the path, probe it before
-        // removing: a connect() success means a live daemon is
-        // listening (we are NOT under systemd here, so fd-lock would
-        // not have fired — e.g. operator launched a second
-        // foreground instance pointing at the same --control-socket
-        // path, or LISTEN_FDS got dropped). Only stale files (left
-        // by a crashed prior run) are removed.
-        if default_path.exists() {
-            match std::os::unix::net::UnixStream::connect(default_path) {
-                Ok(_) => {
-                    return Err(DaemonError::ControlListener(format!(
-                        "{}: another gcit daemon is already listening; refusing to start",
-                        default_path.display(),
-                    )));
-                }
-                Err(_) => {
-                    let _ = std::fs::remove_file(default_path);
-                }
-            }
-        }
-        UnixListener::bind(default_path).map_err(|e| DaemonError::ControlListener(e.to_string()))
-    }
+    crate::systemd::accept_control_socket_from_fds(listen_fds, default_path)
+        .map_err(|e| DaemonError::ControlListener(e.to_string()))
 }
 
 /// Errors that can prevent the daemon from booting cleanly.
