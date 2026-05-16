@@ -213,103 +213,146 @@ impl State {
                 last_poll_at,
                 last_dispatched_at,
                 cooldown_until,
-            } => {
-                let entry = self.flows.entry(flow).or_default();
-                entry.last_sha = Some(last_sha.to_hex().to_string());
-                entry.last_poll_at = Some(last_poll_at);
-                // `Some` arms cooldown; `None` leaves prior value
-                // untouched (observation-only poll cycle).
-                if last_dispatched_at.is_some() {
-                    entry.last_dispatched_at = last_dispatched_at;
-                }
-                if cooldown_until.is_some() {
-                    entry.cooldown_until = cooldown_until;
-                }
-            }
+            } => self.apply_poll_observation(
+                flow,
+                last_sha,
+                last_poll_at,
+                last_dispatched_at,
+                cooldown_until,
+            ),
             StateUpdate::PollTimestamp { flow, last_poll_at } => {
-                let entry = self.flows.entry(flow).or_default();
-                entry.last_poll_at = Some(last_poll_at);
+                self.apply_poll_timestamp(flow, last_poll_at)
             }
             StateUpdate::RunStarted {
                 flow,
                 run_id,
                 started_at,
-            } => {
-                let entry = self.flows.entry(flow.clone()).or_default();
-                // Dedup: the dispatcher must not double-emit
-                // RunStarted for the same run_id (it could happen if
-                // a transient retry inadvertently re-runs the
-                // dispatch path). A duplicate would inflate
-                // active_runs without ever clearing — RunFinished
-                // removes the FIRST match, leaving the second behind
-                // forever. Drop the dup here with a WARN so the bug
-                // is operator-visible.
-                if entry.active_runs.iter().any(|r| r.run_id == run_id) {
-                    warn!(
-                        target: "gcit::state",
-                        flow = %flow,
-                        run_id,
-                        "RunStarted for run_id already in active_runs; ignoring duplicate",
-                    );
-                    return;
-                }
-                entry.active_runs.push(RunState {
-                    run_id,
-                    started_at,
-                    conclusion: None,
-                    completed_at: None,
-                });
-            }
+            } => self.apply_run_started(flow, run_id, started_at),
             StateUpdate::RunFinished {
                 flow,
                 run_id,
                 conclusion,
                 completed_at,
-            } => {
-                let Some(entry) = self.flows.get_mut(&flow) else {
-                    warn!(
-                        target: "gcit::state",
-                        flow = %flow,
-                        run_id,
-                        "RunFinished for unknown flow; dropping",
-                    );
-                    return;
-                };
-                let pos = entry.active_runs.iter().position(|r| r.run_id == run_id);
-                let Some(pos) = pos else {
-                    warn!(
-                        target: "gcit::state",
-                        flow = %flow,
-                        run_id,
-                        "RunFinished for run_id not in active_runs; dropping",
-                    );
-                    return;
-                };
-                let mut run = entry.active_runs.remove(pos);
-                run.conclusion = Some(conclusion);
-                run.completed_at = Some(completed_at);
-                entry.notified_runs.push(run);
-                // Cap per-flow notified_runs to bound state file
-                // growth. State only needs enough history to dedup
-                // notifications across daemon restarts; a 100-run
-                // window covers every reasonable cadence
-                // (poll_interval x runs/poll). Drains from the FRONT
-                // (oldest first) so the most recent N entries are
-                // retained.
-                if entry.notified_runs.len() > NOTIFIED_RUNS_CAP {
-                    let excess = entry.notified_runs.len() - NOTIFIED_RUNS_CAP;
-                    entry.notified_runs.drain(..excess);
-                }
-            }
-            StateUpdate::FlowRemoved { flow } => {
-                if self.flows.remove(&flow).is_none() {
-                    warn!(
-                        target: "gcit::state",
-                        flow = %flow,
-                        "FlowRemoved for unknown flow; dropping",
-                    );
-                }
-            }
+            } => self.apply_run_finished(flow, run_id, conclusion, completed_at),
+            StateUpdate::FlowRemoved { flow } => self.apply_flow_removed(flow),
+        }
+    }
+
+    /// Update the per-flow `last_sha` + `last_poll_at` from a fresh
+    /// `Refreshed` outcome. `last_dispatched_at` and `cooldown_until`
+    /// follow a paired-Some contract: `Some` arms the cooldown,
+    /// `None` leaves the prior value untouched (observation-only
+    /// poll cycle).
+    fn apply_poll_observation(
+        &mut self,
+        flow: String,
+        last_sha: gix_hash::ObjectId,
+        last_poll_at: chrono::DateTime<chrono::Utc>,
+        last_dispatched_at: Option<chrono::DateTime<chrono::Utc>>,
+        cooldown_until: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
+        let entry = self.flows.entry(flow).or_default();
+        entry.last_sha = Some(last_sha.to_hex().to_string());
+        entry.last_poll_at = Some(last_poll_at);
+        if last_dispatched_at.is_some() {
+            entry.last_dispatched_at = last_dispatched_at;
+        }
+        if cooldown_until.is_some() {
+            entry.cooldown_until = cooldown_until;
+        }
+    }
+
+    /// Liveness-only refresh: bumps `last_poll_at` for a flow whose
+    /// upstream poll cycle observed no SHA change (grokmirror
+    /// fingerprint match, GitHub API 304 not-modified, UnbornRef).
+    fn apply_poll_timestamp(&mut self, flow: String, last_poll_at: chrono::DateTime<chrono::Utc>) {
+        let entry = self.flows.entry(flow).or_default();
+        entry.last_poll_at = Some(last_poll_at);
+    }
+
+    /// Append a freshly-correlated run to `active_runs`. Dedup: the
+    /// dispatcher must not double-emit RunStarted for the same
+    /// run_id (could happen if a transient retry re-runs the dispatch
+    /// path). A duplicate would inflate active_runs without ever
+    /// clearing because RunFinished removes the FIRST match — the
+    /// second would persist forever. Drop the dup here with a WARN
+    /// so the bug is operator-visible.
+    fn apply_run_started(
+        &mut self,
+        flow: String,
+        run_id: u64,
+        started_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let entry = self.flows.entry(flow.clone()).or_default();
+        if entry.active_runs.iter().any(|r| r.run_id == run_id) {
+            warn!(
+                target: "gcit::state",
+                flow = %flow,
+                run_id,
+                "RunStarted for run_id already in active_runs; ignoring duplicate",
+            );
+            return;
+        }
+        entry.active_runs.push(RunState {
+            run_id,
+            started_at,
+            conclusion: None,
+            completed_at: None,
+        });
+    }
+
+    /// Move a run from `active_runs` to `notified_runs` with its
+    /// terminal conclusion. Drops with a WARN when the flow or
+    /// run_id is unknown (out-of-order delivery during reload, or a
+    /// dispatcher bug). Caps `notified_runs` to `NOTIFIED_RUNS_CAP`
+    /// by draining the oldest entries; state only needs enough
+    /// history to dedup notifications across daemon restarts.
+    fn apply_run_finished(
+        &mut self,
+        flow: String,
+        run_id: u64,
+        conclusion: String,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let Some(entry) = self.flows.get_mut(&flow) else {
+            warn!(
+                target: "gcit::state",
+                flow = %flow,
+                run_id,
+                "RunFinished for unknown flow; dropping",
+            );
+            return;
+        };
+        let Some(pos) = entry.active_runs.iter().position(|r| r.run_id == run_id) else {
+            warn!(
+                target: "gcit::state",
+                flow = %flow,
+                run_id,
+                "RunFinished for run_id not in active_runs; dropping",
+            );
+            return;
+        };
+        let mut run = entry.active_runs.remove(pos);
+        run.conclusion = Some(conclusion);
+        run.completed_at = Some(completed_at);
+        entry.notified_runs.push(run);
+        if entry.notified_runs.len() > NOTIFIED_RUNS_CAP {
+            let excess = entry.notified_runs.len() - NOTIFIED_RUNS_CAP;
+            entry.notified_runs.drain(..excess);
+        }
+    }
+
+    /// Drop the per-flow entry on reload-driven removal or
+    /// URL-changed restart. Logs a WARN when the flow is unknown
+    /// (already-removed flow re-emitted FlowRemoved, or producer
+    /// race during reload).
+    fn apply_flow_removed(&mut self, flow: String) {
+        if self.flows.remove(&flow).is_none() {
+            warn!(
+                target: "gcit::state",
+                flow = %flow,
+                "FlowRemoved for unknown flow; dropping",
+            );
         }
     }
 }
