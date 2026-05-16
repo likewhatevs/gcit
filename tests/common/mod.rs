@@ -24,6 +24,7 @@
 #![allow(dead_code)]
 
 pub mod bare_repo;
+pub mod fake_daemon;
 pub mod recording_notifier;
 
 use std::collections::BTreeMap;
