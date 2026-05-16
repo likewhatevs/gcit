@@ -29,7 +29,7 @@ tokio-util = { version = "0.7", default-features = false, features = ["codec"] }
 # StreamExt for the codec read side.
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "gzip", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "gzip", "stream"] }
 
 gix-url = "0.36"
 gix-transport = { version = "0.57", default-features = false, features = ["blocking-client", "http-client-reqwest", "http-client-reqwest-rust-tls"] }
