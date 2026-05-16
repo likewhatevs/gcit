@@ -299,7 +299,14 @@ pub(super) async fn spawn_flow(
     };
 
     // Build notifiers for every destination.
-    let notifiers = match build_notifiers(flow, &ctx.credential_pool, &ctx.hostname).await {
+    let notifiers = match build_notifiers(
+        flow,
+        &ctx.credential_pool,
+        &ctx.hostname,
+        config.http.request_timeout,
+    )
+    .await
+    {
         Ok(n) => n,
         Err(e) => {
             // Prefix the operator-visible last_error with the flow name
@@ -508,6 +515,7 @@ async fn build_notifiers(
     flow: &FlowConfig,
     credential_pool: &Arc<RwLock<CredentialPool>>,
     hostname: &Arc<String>,
+    http_request_timeout: Duration,
 ) -> Result<Vec<Arc<dyn DynNotifier>>, String> {
     let mut out: Vec<Arc<dyn DynNotifier>> = Vec::with_capacity(flow.destination.len());
     let hb = Arc::new(crate::notify::strict_handlebars());
@@ -522,7 +530,7 @@ async fn build_notifiers(
                     .map_err(|e| format!("discord credential: {e}"))?;
                 let parsed = discord::parse_webhook_url(url_secret.expose_secret())
                     .map_err(|e| format!("discord webhook URL: {e}"))?;
-                let client = discord::Client::new(Duration::from_secs(30))
+                let client = discord::Client::new(http_request_timeout)
                     .map_err(|e| format!("discord client: {e}"))?;
                 let n = DiscordNotifier::new(
                     format!("{}.dest{}", flow.name, idx),
@@ -686,7 +694,7 @@ mod tests {
         let flow = flow_no_destinations("flow1");
         let pool = Arc::new(RwLock::new(CredentialPool::default()));
         let hostname = Arc::new("ci-host".to_string());
-        let n = build_notifiers(&flow, &pool, &hostname)
+        let n = build_notifiers(&flow, &pool, &hostname, std::time::Duration::from_secs(30))
             .await
             .expect("build must succeed");
         assert!(
@@ -706,7 +714,7 @@ mod tests {
             }));
         let pool = Arc::new(RwLock::new(CredentialPool::default()));
         let hostname = Arc::new("ci-host".to_string());
-        let n = build_notifiers(&flow, &pool, &hostname)
+        let n = build_notifiers(&flow, &pool, &hostname, std::time::Duration::from_secs(30))
             .await
             .expect("build must succeed for local_mail-only flow");
         assert_eq!(
@@ -737,7 +745,7 @@ mod tests {
             }));
         let pool = Arc::new(RwLock::new(CredentialPool::default()));
         let hostname = Arc::new("ci-host".to_string());
-        let n = build_notifiers(&flow, &pool, &hostname)
+        let n = build_notifiers(&flow, &pool, &hostname, std::time::Duration::from_secs(30))
             .await
             .expect("build must succeed");
         assert_eq!(n.len(), 2);
@@ -766,7 +774,9 @@ mod tests {
         // `Result<Vec<Arc<dyn DynNotifier>>, String>::expect_err` would
         // require Debug on the Ok variant; DynNotifier is dyn-erased
         // and not Debug. Match instead so the test stays terse.
-        let err = match build_notifiers(&flow, &pool, &hostname).await {
+        let err = match build_notifiers(&flow, &pool, &hostname, std::time::Duration::from_secs(30))
+            .await
+        {
             Ok(_) => panic!("invalid unix user must surface as Err"),
             Err(e) => e,
         };
@@ -809,7 +819,9 @@ mod tests {
         // pool's resolve_secret falls through to the step-4 error.
         let pool = Arc::new(RwLock::new(CredentialPool::default()));
         let hostname = Arc::new("ci-host".to_string());
-        let err = match build_notifiers(&flow, &pool, &hostname).await {
+        let err = match build_notifiers(&flow, &pool, &hostname, std::time::Duration::from_secs(30))
+            .await
+        {
             Ok(_) => panic!("missing discord credential must surface as Err"),
             Err(e) => e,
         };
