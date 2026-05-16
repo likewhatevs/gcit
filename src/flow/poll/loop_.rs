@@ -26,6 +26,14 @@ use super::PollParams;
 /// which constructs a `RealPollExecutor`; the supervisor end-to-end
 /// test harness in `tests/poll_unborn_ref.rs` wires in a
 /// `ScriptedPollExecutor`.
+/// Result of one poll cycle's PollOutcome-handling step. `Return`
+/// short-circuits the outer loop (channel closed, cancel observed);
+/// `Continue` proceeds to the next cycle.
+enum CycleAction {
+    Continue,
+    Return,
+}
+
 pub async fn run_with_executor<E>(
     params: PollParams,
     executor: E,
@@ -62,19 +70,12 @@ pub async fn run_with_executor<E>(
             params.effective_poll.jitter,
             &mut rng,
         );
-        tokio::select! {
-            _ = cancel.cancelled() => {
-                info!(target: "gcit::flow::poll", flow = %params.flow_name, "poll loop cancelled");
-                return;
-            }
-            _ = tokio::time::sleep(sleep_for) => {}
+        if !sleep_or_cancel(sleep_for, &params.flow_name, &cancel).await {
+            return;
         }
 
-        if let Some(b) = &params.rate_bucket {
-            tokio::select! {
-                _ = cancel.cancelled() => return,
-                _ = b.acquire() => {}
-            }
+        if !acquire_rate_or_cancel(&params, &cancel).await {
+            return;
         }
 
         let outcome = match executor.poll_cycle(&params, &cancel).await {
@@ -91,170 +92,252 @@ pub async fn run_with_executor<E>(
                 return;
             }
             Err(PollCycleError::Failed(message)) => {
-                warn!(
-                    target: "gcit::flow::poll",
-                    flow = %params.flow_name,
-                    error = %message,
-                    "poll cycle failed; continuing on cadence",
-                );
-                record_last_error(
-                    &params.last_errors,
-                    &params.flow_name,
-                    "git_poll_failed",
-                    &message,
-                    None,
-                )
-                .await;
-                last_error_cleared = false;
+                record_poll_failure(&params, &message, &mut last_error_cleared).await;
                 continue;
             }
         };
 
-        match outcome {
+        let action = match outcome {
             PollOutcome::Refreshed { sha } => {
-                let now = Utc::now();
-                let diff = compare_sha(last_sha, sha);
-                if diff.trigger {
-                    let cooled_down =
-                        is_cooled_down(last_dispatched_at, now, params.effective_poll.cooldown);
-                    if cooled_down {
-                        // `from_std` only fails for durations beyond
-                        // i64::MAX ms — unreachable for a cooldown.
-                        let cooldown_until =
-                            chrono::Duration::from_std(params.effective_poll.cooldown)
-                                .ok()
-                                .map(|d| now + d);
-                        let observation = StateUpdate::PollObservation {
-                            flow: params.flow_name.clone(),
-                            last_sha: sha,
-                            last_poll_at: now,
-                            last_dispatched_at: Some(now),
-                            cooldown_until,
-                        };
-                        let signal = Some(TriggerSignal {
-                            observed_sha: sha,
-                            observed_at: now,
-                        });
-                        match send_trigger_then_observation(
-                            &params.flow_name,
-                            signal,
-                            observation,
-                            &state_tx,
-                            &trigger_tx,
-                            &cancel,
-                        )
-                        .await
-                        {
-                            SendOutcome::Sent => {}
-                            SendOutcome::Cancelled
-                            | SendOutcome::TriggerChannelClosed
-                            | SendOutcome::StateChannelClosed => return,
-                        }
-                        last_dispatched_at = Some(now);
-                        last_sha = Some(diff.observed);
-                    } else {
-                        // Cooldown active: suppress trigger, refresh
-                        // last_poll_at only, leave in-memory last_sha
-                        // unchanged so the diff re-fires after the
-                        // window elapses.
-                        debug!(
-                            target: "gcit::flow::poll",
-                            flow = %params.flow_name,
-                            "cooldown active; suppressing trigger",
-                        );
-                        if !send_state_or_exit(
-                            &state_tx,
-                            StateUpdate::PollTimestamp {
-                                flow: params.flow_name.clone(),
-                                last_poll_at: now,
-                            },
-                            &params.flow_name,
-                        )
-                        .await
-                        {
-                            return;
-                        }
-                    }
-                } else {
-                    // Baseline / unchanged-since-last-observation.
-                    // last_dispatched_at: None preserves the prior
-                    // cooldown timestamp via the apply rule; the
-                    // companion cooldown_until: None follows the
-                    // same paired contract.
-                    let observation = StateUpdate::PollObservation {
-                        flow: params.flow_name.clone(),
-                        last_sha: sha,
-                        last_poll_at: now,
-                        last_dispatched_at: None,
-                        cooldown_until: None,
-                    };
-                    if !send_state_or_exit(&state_tx, observation, &params.flow_name).await {
-                        return;
-                    }
-                    last_sha = Some(diff.observed);
-                }
-                maybe_clear_last_error(&params, &mut last_error_cleared).await;
+                handle_refreshed(
+                    &params,
+                    sha,
+                    &mut last_sha,
+                    &mut last_dispatched_at,
+                    &mut last_error_cleared,
+                    &state_tx,
+                    &trigger_tx,
+                    &cancel,
+                )
+                .await
             }
             PollOutcome::Unchanged => {
-                // Grokmirror fingerprint match: liveness without a
-                // fresh ObjectId. Refresh last_poll_at via
-                // PollTimestamp so `gcit status` shows the flow is
-                // alive.
-                let now = Utc::now();
-                if !send_state_or_exit(
-                    &state_tx,
-                    StateUpdate::PollTimestamp {
-                        flow: params.flow_name.clone(),
-                        last_poll_at: now,
-                    },
-                    &params.flow_name,
-                )
-                .await
-                {
-                    return;
-                }
-                maybe_clear_last_error(&params, &mut last_error_cleared).await;
+                handle_unchanged(&params, &mut last_error_cleared, &state_tx).await
             }
             PollOutcome::UnbornRef => {
-                // Configuration condition (operator typo, branch
-                // deleted, branch not yet pushed). Surface under
-                // `git_poll_failed`; the next Refreshed/Unchanged
-                // clears it via the `last_error_cleared` latch.
-                // Liveness: emit PollTimestamp so last_poll_at
-                // advances despite no fresh ObjectId.
-                let now = Utc::now();
-                if !send_state_or_exit(
-                    &state_tx,
-                    StateUpdate::PollTimestamp {
-                        flow: params.flow_name.clone(),
-                        last_poll_at: now,
-                    },
-                    &params.flow_name,
-                )
-                .await
-                {
-                    return;
-                }
-                let message = unborn_ref_message(&params.flow_name, &params.url, &params.ref_name);
-                warn!(
-                    target: "gcit::flow::poll",
-                    flow = %params.flow_name,
-                    url = %params.url,
-                    ref_name = %params.ref_name,
-                    "configured ref does not exist on remote; continuing on cadence",
-                );
-                record_last_error(
-                    &params.last_errors,
-                    &params.flow_name,
-                    "git_poll_failed",
-                    &message,
-                    None,
-                )
-                .await;
-                last_error_cleared = false;
+                handle_unborn_ref(&params, &mut last_error_cleared, &state_tx).await
             }
+        };
+        if matches!(action, CycleAction::Return) {
+            return;
         }
     }
+}
+
+/// Sleep for `sleep_for` while honouring cancellation. Returns true
+/// when the sleep elapsed naturally and the loop should continue;
+/// false when cancellation fired and the loop should return.
+async fn sleep_or_cancel(
+    sleep_for: std::time::Duration,
+    flow_name: &str,
+    cancel: &CancellationToken,
+) -> bool {
+    tokio::select! {
+        _ = cancel.cancelled() => {
+            info!(target: "gcit::flow::poll", flow = %flow_name, "poll loop cancelled");
+            false
+        }
+        _ = tokio::time::sleep(sleep_for) => true,
+    }
+}
+
+/// Acquire the optional per-credential rate bucket while honouring
+/// cancellation. Returns true on successful acquire (or when no
+/// bucket is configured); false on cancellation.
+async fn acquire_rate_or_cancel(params: &PollParams, cancel: &CancellationToken) -> bool {
+    let Some(b) = &params.rate_bucket else {
+        return true;
+    };
+    tokio::select! {
+        _ = cancel.cancelled() => false,
+        _ = b.acquire() => true,
+    }
+}
+
+/// Record a failed poll cycle: log the warn, record last_error under
+/// `git_poll_failed`, and reset the `last_error_cleared` latch so the
+/// next successful cycle re-clears.
+async fn record_poll_failure(params: &PollParams, message: &str, last_error_cleared: &mut bool) {
+    warn!(
+        target: "gcit::flow::poll",
+        flow = %params.flow_name,
+        error = %message,
+        "poll cycle failed; continuing on cadence",
+    );
+    record_last_error(
+        &params.last_errors,
+        &params.flow_name,
+        "git_poll_failed",
+        message,
+        None,
+    )
+    .await;
+    *last_error_cleared = false;
+}
+
+/// Handle a `Refreshed` outcome: compute the diff, send the trigger
+/// plus observation pair when the cooldown is clear, or refresh the
+/// timestamp when the cooldown is active. Updates `last_sha` and
+/// `last_dispatched_at` in place. Returns `Return` on channel close
+/// or cancellation, `Continue` otherwise.
+#[allow(clippy::too_many_arguments)]
+async fn handle_refreshed(
+    params: &PollParams,
+    sha: gix_hash::ObjectId,
+    last_sha: &mut Option<gix_hash::ObjectId>,
+    last_dispatched_at: &mut Option<DateTime<Utc>>,
+    last_error_cleared: &mut bool,
+    state_tx: &Sender<StateUpdate>,
+    trigger_tx: &Sender<TriggerSignal>,
+    cancel: &CancellationToken,
+) -> CycleAction {
+    let now = Utc::now();
+    let diff = compare_sha(*last_sha, sha);
+    if diff.trigger {
+        let cooled_down = is_cooled_down(*last_dispatched_at, now, params.effective_poll.cooldown);
+        if cooled_down {
+            // `from_std` only fails for durations beyond i64::MAX ms
+            // — unreachable for a cooldown.
+            let cooldown_until = chrono::Duration::from_std(params.effective_poll.cooldown)
+                .ok()
+                .map(|d| now + d);
+            let observation = StateUpdate::PollObservation {
+                flow: params.flow_name.clone(),
+                last_sha: sha,
+                last_poll_at: now,
+                last_dispatched_at: Some(now),
+                cooldown_until,
+            };
+            let signal = Some(TriggerSignal {
+                observed_sha: sha,
+                observed_at: now,
+            });
+            match send_trigger_then_observation(
+                &params.flow_name,
+                signal,
+                observation,
+                state_tx,
+                trigger_tx,
+                cancel,
+            )
+            .await
+            {
+                SendOutcome::Sent => {}
+                SendOutcome::Cancelled
+                | SendOutcome::TriggerChannelClosed
+                | SendOutcome::StateChannelClosed => return CycleAction::Return,
+            }
+            *last_dispatched_at = Some(now);
+            *last_sha = Some(diff.observed);
+        } else {
+            // Cooldown active: suppress trigger, refresh last_poll_at
+            // only, leave in-memory last_sha unchanged so the diff
+            // re-fires after the window elapses.
+            debug!(
+                target: "gcit::flow::poll",
+                flow = %params.flow_name,
+                "cooldown active; suppressing trigger",
+            );
+            if !send_state_or_exit(
+                state_tx,
+                StateUpdate::PollTimestamp {
+                    flow: params.flow_name.clone(),
+                    last_poll_at: now,
+                },
+                &params.flow_name,
+            )
+            .await
+            {
+                return CycleAction::Return;
+            }
+        }
+    } else {
+        // Baseline / unchanged-since-last-observation.
+        // `last_dispatched_at: None` preserves the prior cooldown
+        // timestamp via the apply rule; the companion
+        // `cooldown_until: None` follows the same paired contract.
+        let observation = StateUpdate::PollObservation {
+            flow: params.flow_name.clone(),
+            last_sha: sha,
+            last_poll_at: now,
+            last_dispatched_at: None,
+            cooldown_until: None,
+        };
+        if !send_state_or_exit(state_tx, observation, &params.flow_name).await {
+            return CycleAction::Return;
+        }
+        *last_sha = Some(diff.observed);
+    }
+    maybe_clear_last_error(params, last_error_cleared).await;
+    CycleAction::Continue
+}
+
+/// Handle an `Unchanged` outcome (grokmirror fingerprint match):
+/// emit a PollTimestamp for liveness without changing last_sha.
+async fn handle_unchanged(
+    params: &PollParams,
+    last_error_cleared: &mut bool,
+    state_tx: &Sender<StateUpdate>,
+) -> CycleAction {
+    let now = Utc::now();
+    if !send_state_or_exit(
+        state_tx,
+        StateUpdate::PollTimestamp {
+            flow: params.flow_name.clone(),
+            last_poll_at: now,
+        },
+        &params.flow_name,
+    )
+    .await
+    {
+        return CycleAction::Return;
+    }
+    maybe_clear_last_error(params, last_error_cleared).await;
+    CycleAction::Continue
+}
+
+/// Handle an `UnbornRef` outcome (configuration condition: operator
+/// typo, branch deleted, branch not yet pushed). Emits a
+/// PollTimestamp for liveness and records the per-flow last_error
+/// under `git_poll_failed` so `gcit status` surfaces it. The next
+/// Refreshed / Unchanged clears the entry via the `last_error_cleared`
+/// latch.
+async fn handle_unborn_ref(
+    params: &PollParams,
+    last_error_cleared: &mut bool,
+    state_tx: &Sender<StateUpdate>,
+) -> CycleAction {
+    let now = Utc::now();
+    if !send_state_or_exit(
+        state_tx,
+        StateUpdate::PollTimestamp {
+            flow: params.flow_name.clone(),
+            last_poll_at: now,
+        },
+        &params.flow_name,
+    )
+    .await
+    {
+        return CycleAction::Return;
+    }
+    let message = unborn_ref_message(&params.flow_name, &params.url, &params.ref_name);
+    warn!(
+        target: "gcit::flow::poll",
+        flow = %params.flow_name,
+        url = %params.url,
+        ref_name = %params.ref_name,
+        "configured ref does not exist on remote; continuing on cadence",
+    );
+    record_last_error(
+        &params.last_errors,
+        &params.flow_name,
+        "git_poll_failed",
+        &message,
+        None,
+    )
+    .await;
+    *last_error_cleared = false;
+    CycleAction::Continue
 }
 
 /// Send `update` and return `true` on success; on a closed writer,
