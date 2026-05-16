@@ -61,6 +61,7 @@ pub const DISPATCH_MAX_ATTEMPTS: u32 = 3;
 /// `url` / `ref_name` are the source-side fields; the bare names
 /// match `SourceConfig`/`SourceInfo`/`PollParams` which already use
 /// the unprefixed form inside source-scoped scopes.
+#[derive(Clone)]
 pub struct FlowDispatchParams {
     pub flow_name: String,
     pub flow_description: Option<String>,

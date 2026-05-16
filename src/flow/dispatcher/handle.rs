@@ -712,30 +712,10 @@ mod tests {
         }
     }
 
-    /// Clone helper local to the dispatcher unit tests.
-    /// `FlowDispatchParams` is not `Clone` (inner Arcs are fine but
-    /// some Cargo features don't carry Clone bounds), so spell out
-    /// the by-field copy here.
-    fn clone_params_for_test(p: &FlowDispatchParams) -> FlowDispatchParams {
-        FlowDispatchParams {
-            flow_name: p.flow_name.clone(),
-            flow_description: p.flow_description.clone(),
-            url: p.url.clone(),
-            ref_name: p.ref_name.clone(),
-            action: p.action.clone(),
-            destinations: p.destinations.clone(),
-            github_client: Arc::clone(&p.github_client),
-            rate_bucket: Arc::clone(&p.rate_bucket),
-            rate_limit: Arc::clone(&p.rate_limit),
-            job_interval: p.job_interval,
-            notifiers: p.notifiers.clone(),
-        }
-    }
-
     #[tokio::test]
     async fn handle_trigger_with_executor_success_fires_on_run_start_via_spawn_fan_out() {
         let recorder = Arc::new(UnitRecordingNotifier::new("notifier-1"));
-        let mut params_inner = clone_params_for_test(&build_test_params(BTreeMap::new()));
+        let mut params_inner = (*build_test_params(BTreeMap::new())).clone();
         params_inner.notifiers = vec![Arc::clone(&recorder) as Arc<dyn super::super::DynNotifier>];
         let params = Arc::new(params_inner);
 
