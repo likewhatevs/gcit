@@ -30,61 +30,8 @@ use std::time::Duration;
 mod common;
 use common::bare_repo::{commit_with_message, file_url_for, init_bare_repo, update_ref};
 
-use tempfile::TempDir;
-
 use gcit::git::ls_remote;
 use gcit::git::PollOutcome;
-
-#[tokio::test]
-#[ignore = "covered by tests/poll_ls_remote.rs::poll_resolves_head_on_populated_repo_to_commit_sha — bare-repo fixture exercises Ref::Symbolic round-trip end-to-end"]
-async fn ls_remote_follows_symref_to_concrete_ref() {
-    let _dir = TempDir::new().unwrap();
-    // Bare repo with HEAD -> refs/heads/main, refs/heads/main = SHA A.
-    // Configure source.ref = "refs/heads/main"; ls-remote returns SHA A.
-    //
-    // Pin: gcit reports SHA A, not the symref string itself.
-    //
-    // Note: "configured ref is a concrete refs/
-    // path; symbolic ref is the upstream's HEAD". A user-friendlier
-    // alternative would be source.ref = "HEAD" -> follow symref. But
-    // gcit's config-load validator requires ref to start with
-    // "refs/", so "HEAD" alone is rejected. Recommend: keep the
-    // explicit-refs-path requirement; operators who want "always-
-    // follow-default-branch" can configure refs/heads/main and rely
-    // on conventional naming. flag.
-}
-
-#[tokio::test]
-#[ignore = "covered by tests/poll_ls_remote.rs::poll_missing_ref_in_populated_repo_returns_unborn — \
-            absent-ref-in-advertisement maps to PollOutcome::UnbornRef regardless of why the ref is absent"]
-async fn ls_remote_handles_default_branch_rename() {
-    let _dir = TempDir::new().unwrap();
-    // Operator configured source.ref = "refs/heads/master". Upstream
-    // renames default branch master -> main; the ref refs/heads/master
-    // is deleted.
-    //
-    // gcit's poll: ls-remote returns no entry for refs/heads/master.
-    // Behavior = unborn ref (cross-reference tests/poll_unborn_ref.rs).
-    // Operator must update config to refs/heads/main.
-    //
-    // The WARN message recommended in poll_unborn_ref.rs::actionable_text
-    // is the operator's hint that this happened.
-}
-
-#[tokio::test]
-#[ignore = "covered by tests/poll_github_api.rs::get_ref_returns_sha_for_existing_branch + \
-            get_ref_404_returns_unborn_ref_outcome — wiremock pins the explicit-ref / 404 split"]
-async fn github_api_handles_default_branch_via_explicit_ref() {
-    // GET /repos/o/r/git/ref/heads/main returns 200 with the SHA.
-    // GET /repos/o/r/git/ref/heads/nonexistent returns 404.
-    //
-    // gcit treats both deterministically: the configured ref is what
-    // we ask for. No automatic fallback to HEAD.
-    //
-    // Pin: gcit does NOT silently follow GitHub's "default_branch"
-    // metadata from /repos/o/r endpoint. Doing so would be a feature
-    // creep — the operator's source.ref is authoritative.
-}
 
 /// Pathological symref cycle: a flow whose configured ref participates
 /// in a cycle (`refs/heads/foo -> refs/heads/main -> refs/heads/foo`)
@@ -191,39 +138,3 @@ async fn ls_remote_circular_symref_handled_safely() {
 // bare-repo fixture helpers moved to tests/common/bare_repo.rs; both
 // tests/poll_ls_remote.rs and this file now share the same canonical
 // copy.
-
-#[tokio::test]
-#[ignore = "covered by tests/poll_ls_remote.rs::poll_resolves_annotated_tag_returns_tag_sha_not_peel — \
-            bare-repo fixture builds an annotated tag via `git mktag` and asserts the TAG SHA is returned, \
-            not the peeled commit SHA"]
-async fn annotated_tag_dereferenced_to_commit_sha() {
-    let _dir = TempDir::new().unwrap();
-    // Annotated tags (created via `git tag -a`) point to a tag object
-    // which in turn points to a commit. ls-remote returns BOTH the tag
-    // SHA and a "peeled" entry refs/tags/v1.0^{} = commit SHA.
-    //
-    // gcit's source.ref = "refs/tags/v1.0" — should it report the tag
-    // SHA or the peeled commit SHA?
-    //
-    // gcit reports the tag SHA (NOT peeled).
-    // If gcit reported the peeled commit, then re-tagging v1.0 to point
-    // at a different commit (`git tag -f`) wouldn't trigger because the
-    // peeled commit might still be reachable. Tag-as-marker semantics
-    // need the tag SHA. flag.
-    //
-    // Pure ls-remote returns tag SHA at refs/tags/v1.0; the peeled
-    // entry is at refs/tags/v1.0^{}. gcit asks for refs/tags/v1.0 and
-    // gets back the tag SHA — natural behavior. Pin via test.
-}
-
-#[tokio::test]
-#[ignore = "covered by tests/poll_ls_remote.rs::poll_resolves_lightweight_tag_to_commit_sha — \
-            bare-repo fixture pins the Direct-ref arm against a real ls-refs response"]
-async fn lightweight_tag_resolves_directly_to_commit() {
-    let _dir = TempDir::new().unwrap();
-    // Lightweight tags (`git tag` without -a) are simple refs pointing
-    // directly at a commit. No tag object, no peeling. gcit's poll
-    // returns the commit SHA — no surprise.
-    //
-    // Pin via test to distinguish from the annotated-tag case above.
-}

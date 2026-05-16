@@ -52,51 +52,12 @@ use gcit::flow::TriggerSignal;
 use gcit::git::PollOutcome;
 use gcit::state::StateUpdate;
 
-#[tokio::test]
-#[ignore = "covered by `unborn_ref_records_last_error_emits_no_trigger` below via the \
-            ScriptedPollExecutor harness; this per-strategy skeleton stays #[ignore]'d as a \
-            placeholder for the future strategy-driven test that wires real wiremock / octocrab \
-            into the harness — useful as a regression-catcher for the network-layer code paths \
-            that the harness deliberately mocks out"]
-async fn github_api_unborn_ref_surfaces_in_status_no_trigger() {
-    // wiremock GET /repos/o/r/git/ref/heads/nonexistent -> 404 with
-    // GitHub error body { "message": "Not Found", "documentation_url": ... }.
-    //
-    // Drive one poll cycle. Assert:
-    //   - tracing emits WARN target="gcit::flow::poll" with structured
-    //     fields {flow=<name>, url=<source url>, ref_name=<ref>} and
-    //     message "configured ref does not exist on remote; continuing
-    //     on cadence"
-    //   - state.flows[<name>].last_error == Some({kind: "git_poll_failed", ...})
-    //   - state.flows[<name>].last_poll_at advances on every cycle
-    //   - NO TriggerSignal sent to the dispatcher (test channel records 0)
-    //   - daemon.is_ready() == true
-}
-
-#[tokio::test]
-#[ignore = "covered by `unborn_ref_records_last_error_emits_no_trigger` below via the \
-            ScriptedPollExecutor harness — strategy-agnostic. Cross-references the strategy-layer \
-            pin in tests/poll_grokmirror.rs::lookup_fingerprint_for_unknown_repo_returns_repo_not_in_manifest"]
-async fn grokmirror_repo_not_in_manifest_surfaces_in_status_no_trigger() {
-    // Manifest body contains repos /a/.git, /b/.git but configured URL
-    // points to /c/.git. PollOutcome::UnbornRef. Same assertions as the
-    // github_api case.
-}
-
-#[tokio::test]
-#[ignore = "covered by `unborn_ref_records_last_error_emits_no_trigger` below via the \
-            ScriptedPollExecutor harness — strategy-agnostic. Cross-references the strategy-layer \
-            pins in tests/poll_ls_remote.rs::poll_empty_repo_returns_unborn_ref_not_panic and \
-            tests/poll_ls_remote.rs::poll_missing_ref_in_populated_repo_returns_unborn"]
-async fn ls_remote_unborn_ref_surfaces_in_status_no_trigger() {
-    // Bare repo with no commits; ls-remote returns empty ref list.
-    // Same assertions.
-}
-
 // ---------------------------------------------------------------------------
 // ACTIVATED tests below: drive `run_with_executor` against a
 // `ScriptedPollExecutor` to exercise the supervisor wiring directly,
-// strategy-agnostic.
+// strategy-agnostic. Per-strategy network-layer regression tests live
+// in tests/poll_ls_remote.rs, tests/poll_github_api.rs, and
+// tests/poll_grokmirror.rs.
 
 /// One UnbornRef cycle records `kind="git_poll_failed"` in last_errors,
 /// emits a `PollTimestamp` for liveness, and DOES NOT send a
@@ -298,17 +259,6 @@ async fn unborn_ref_then_ref_appears_clears_last_error() {
     );
 }
 
-#[tokio::test]
-#[ignore = "covered by `unborn_ref_loops_on_configured_cadence` below via the ScriptedPollExecutor \
-            harness — three back-to-back UnbornRef cycles assert continued cadence with no backoff. \
-            This per-strategy skeleton stays #[ignore]'d as a placeholder for future cadence \
-            regressions specific to backoff classification"]
-async fn unborn_ref_does_not_count_against_backoff() {
-    // Unborn ref is Permanent (not Transient). It does NOT trigger backon
-    // exponential delay; the next poll happens on the configured
-    // source_interval cadence (typically 60s/300s).
-}
-
 /// Three back-to-back UnbornRef cycles: the loop continues on
 /// `source_interval` cadence (no backoff classification of UnbornRef
 /// as Transient). Asserts the harness sees three PollTimestamp
@@ -379,17 +329,6 @@ async fn unborn_ref_loops_on_configured_cadence() {
         .get("unborn-cadence")
         .expect("UnbornRef cycles must leave a last_error entry");
     assert_eq!(entry.kind(), "git_poll_failed");
-}
-
-#[tokio::test]
-#[ignore = "covered by `unborn_ref_isolation_one_flow_does_not_starve_another` below via the \
-            ScriptedPollExecutor harness — two flows share trigger/state channels but each has its \
-            own CancellationToken + scripted executor"]
-async fn unborn_ref_in_one_flow_does_not_crash_other_flows() {
-    // Two flows configured. Flow A's ref is unborn; Flow B's ref exists
-    // and changes from A -> B. Single poll cycle:
-    //   - Flow A: WARN, no trigger, last_error set on flow A
-    //   - Flow B: PollObservation, TriggerSignal emitted normally
 }
 
 /// Per-flow isolation: flow A loops on UnbornRef while flow B sees a
@@ -532,19 +471,6 @@ async fn unborn_ref_isolation_one_flow_does_not_starve_another() {
         !g.contains_key("flow-b"),
         "flow-b's first Refreshed clears any latent last_error entry",
     );
-}
-
-#[tokio::test]
-#[ignore = "covered by `unborn_ref_records_last_error_emits_no_trigger` above (the full message \
-            text is asserted via .contains() on ref + URL) and by the in-module unit tests \
-            flow::poll::tests::unborn_ref_message_* which pin the exact format including \
-            the 'wait if it's still being pushed' remediation hint"]
-async fn unborn_ref_warn_message_includes_actionable_text() {
-    // The last_error message must guide the operator. Pinned by
-    // `poll::unborn_ref_message`:
-    //   "ref refs/heads/main not found at https://github.com/o/r — \
-    //    verify the ref exists upstream, wait if it's still being \
-    //    pushed, or update flow.<name>.source.ref"
 }
 
 // ---------------------------------------------------------------------------
