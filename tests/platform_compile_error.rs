@@ -9,14 +9,15 @@
 // `.github/workflows/ci.yml` runs `cargo check --target x86_64-apple-darwin`
 // in a job that MUST FAIL with the compile_error! message.
 //
-// Skeleton — flip the #[ignore] when CI is wired to mirror the
-// linux-only smoke assertion here.
-
+/// Smoke check: the fact that this Linux-test binary built at all is
+/// proof that `compile_error!` in src/lib.rs did not fire on
+/// `cfg(not(target_os = "linux"))`. Pin the postcondition explicitly
+/// so a future test runner that somehow picks up a non-Linux artifact
+/// (cross-compile experiments, etc.) fails the assertion rather than
+/// silently passing. The actual non-Linux assertion lives in CI —
+/// see the workflow snippet at the bottom of this file.
 #[test]
-#[ignore = "requires CI to run the linux-only build smoke"]
 fn linux_target_compiles() {
-    // If this test binary built on Linux, the compile_error! on non-Linux
-    // didn't fire. That's the postcondition we want.
     assert_eq!(std::env::consts::OS, "linux");
 }
 

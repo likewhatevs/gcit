@@ -204,14 +204,85 @@ fn unit_contains_hardening_directive(#[case] directive: &str) {
     );
 }
 
+/// Pin the rendered service unit's systemd-analyze security score
+/// at or below 3.0 (the "GOOD" hardening band). The text-based
+/// hardening directive tests above catch most regressions
+/// individually; this is the holistic verifier that asserts the
+/// directives combine to a sane score.
+///
+/// Gated on the presence of the `systemd-analyze` binary AND
+/// `SYSTEMD_TESTS=1` (project canon for systemd-dependent
+/// integration tests). When unset, the test prints a skip notice and
+/// returns — `cargo nextest run` on a developer workstation without
+/// systemd-analyze installed does not block the test suite.
 #[test]
-#[ignore = "needs `systemd-analyze security` binary on the runner; gate behind SYSTEMD_TESTS=1 \
-            (project canon for systemd-dependent tests) when activated"]
 fn unit_systemd_analyze_score_below_three() {
-    // Pin score ≤ 3.0 ("GOOD" hardening band) by piping the
-    // rendered unit through `systemd-analyze security`. The text-
-    // based hardening directive tests above catch most regressions;
-    // this is the holistic verifier.
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    if std::env::var("SYSTEMD_TESTS").is_err() {
+        eprintln!(
+            "unit_systemd_analyze_score_below_three: skipped — \
+             set SYSTEMD_TESTS=1 to enable systemd-dependent tests",
+        );
+        return;
+    }
+    let probe = Command::new("systemd-analyze").arg("--version").output();
+    let analyze_available = probe.as_ref().map(|o| o.status.success()).unwrap_or(false);
+    if !analyze_available {
+        eprintln!(
+            "unit_systemd_analyze_score_below_three: skipped — \
+             `systemd-analyze` binary not available on this runner",
+        );
+        return;
+    }
+
+    let cfg = load_str(CFG_WITH_LOCAL_MAIL, Path::new("config.toml")).expect("config parses");
+    let scope = InstallScope::System;
+    let unit = render_service_unit(&cfg, scope, Path::new("/usr/bin/gcit"));
+
+    let mut child = Command::new("systemd-analyze")
+        .arg("security")
+        .arg("--no-pager")
+        .arg("--offline=true")
+        .arg("/dev/stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("systemd-analyze security must spawn");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe must be open")
+        .write_all(unit.as_bytes())
+        .expect("write unit to systemd-analyze stdin");
+    let out = child
+        .wait_with_output()
+        .expect("systemd-analyze must terminate");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // systemd-analyze security prints the score on a line ending in
+    // "Overall exposure level for gcit.service: <N.N> <BAND>". Parse
+    // the float; fail with the full stdout if the line is missing.
+    let score = stdout
+        .lines()
+        .find_map(|line| {
+            let key = "Overall exposure level for ";
+            let idx = line.find(key)?;
+            let after = &line[idx + key.len()..];
+            // "<unit>: <N.N> <BAND>"
+            let colon = after.find(':')?;
+            let rest = after[colon + 1..].trim();
+            let n_end = rest.find(' ').unwrap_or(rest.len());
+            rest[..n_end].parse::<f64>().ok()
+        })
+        .unwrap_or_else(|| {
+            panic!("could not parse systemd-analyze overall exposure level from stdout:\n{stdout}",)
+        });
+    assert!(
+        score <= 3.0,
+        "rendered unit's systemd-analyze score is {score} (expected ≤ 3.0); stdout:\n{stdout}",
+    );
 }
 
 #[tokio::test]

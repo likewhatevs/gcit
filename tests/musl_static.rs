@@ -35,8 +35,11 @@ fn target_binary_path() -> Option<PathBuf> {
     }
 }
 
+/// Always runs; no-op when GCIT_MUSL_TEST is unset (every non-musl
+/// invocation of nextest). When the env var is set in a CI musl job,
+/// the test resolves the release binary path and inverts ldd's
+/// dynamic-executable exit status to assert static linkage.
 #[test]
-#[ignore = "requires musl release pipeline; gated by GCIT_MUSL_TEST=1 in CI musl job"]
 fn musl_binary_is_statically_linked() {
     if std::env::var("GCIT_MUSL_TEST").is_err() {
         // Not the musl job; nothing to assert.
