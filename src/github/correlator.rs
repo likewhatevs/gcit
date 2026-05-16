@@ -192,7 +192,7 @@ pub async fn correlate(
 
     // Polling cadence (5s -> 60s, factor 2.0, jitter on). Driven by
     // backon's ExponentialBackoff iterator rather than hand-rolled
-    // saturating arithmetic. We use the iterator directly (not
+    // saturating arithmetic. The iterator is used directly (not
     // `.retry()`) because the correlator's outer loop is
     // deadline-bounded with cancellation-aware sleeps, not a
     // per-attempt error retry.
@@ -207,32 +207,16 @@ pub async fn correlate(
     let mut attempts: u32 = 0;
     // Anchor for the drain deadline. `None` until we first observe
     // `cancel.is_cancelled()`; on that observation we capture the
-    // current Instant once and reuse it on every subsequent iteration
-    // so the drain budget cannot slide forward by recomputing
-    // `now + DRAIN_TIMEOUT` each loop. Without the anchor a
-    // long-running poll cycle would keep extending the drain deadline
-    // and the supervisor's shutdown bound would never fire.
+    // current Instant once and reuse it so the drain budget cannot
+    // slide forward by recomputing `now + DRAIN_TIMEOUT` each loop.
     let mut drain_start: Option<Instant> = None;
 
     loop {
         attempts += 1;
 
-        // Compute the effective deadline for this iteration. If
-        // drain has fired, take the lesser of (normal_deadline,
-        // drain_start + DRAIN_TIMEOUT).
-        let now = Instant::now();
-        let effective_deadline = if cancel.is_cancelled() {
-            // Capture the drain anchor on the first observation;
-            // reuse it thereafter so the drain budget is bounded by
-            // the actual cancel onset, not by `now`.
-            let onset = *drain_start.get_or_insert(now);
-            let drain_deadline = onset + DRAIN_TIMEOUT;
-            std::cmp::min(normal_deadline, drain_deadline)
-        } else {
-            normal_deadline
-        };
-
-        if now >= effective_deadline {
+        let effective_deadline =
+            compute_effective_deadline(&cancel, normal_deadline, &mut drain_start);
+        if Instant::now() >= effective_deadline {
             return Err(CorrelationError::Timeout {
                 repo: params.repo.clone(),
                 workflow: params.workflow.clone(),
@@ -245,95 +229,143 @@ pub async fn correlate(
             });
         }
 
-        // Run one full pagination scan looking for a name-match.
-        match scan_runs_for_match(client, rate_limit, params).await {
-            Ok(ScanResult::SingleMatch(run)) => {
-                debug!(
-                    run_id = run.id.0,
-                    attempts, "correlation matched on Run.name",
-                );
-                return Ok(CorrelationOutcome {
-                    run_id: run.id.0,
-                    summary: run_to_summary(&run),
-                });
-            }
-            Ok(ScanResult::DuplicateMatch(ids)) => {
-                warn!(?ids, "duplicate gcit_run_id matches; aborting correlation",);
-                return Err(CorrelationError::DuplicateMatch {
-                    repo: params.repo.clone(),
-                    workflow: params.workflow.clone(),
-                    gcit_run_id: params.gcit_run_id,
-                    run_ids: ids,
-                });
-            }
-            Ok(ScanResult::NoMatch) => { /* fall through to fallback or backoff */ }
-            Err(e) => {
-                // Permanent errors (Unauthorized/Forbidden/etc.)
-                // bypass the retry loop. Transient retry via the
-                // outer backoff.
-                if !e.is_transient() {
-                    return Err(CorrelationError::Github(e));
-                }
-                warn!(error = %e, attempts, "transient error during correlation scan");
-            }
+        if let Some(outcome) = scan_name_match(client, rate_limit, params, attempts).await? {
+            return Ok(outcome);
         }
 
-        // Fallback path: if the workflow doesn't carry a
-        // run-name directive, the name match is impossible. Try
-        // head_sha + created>=dispatched_at instead.
-        // run_name_configured == Some(false) -> skip name path
-        // entirely; go to fallback. None -> we've already tried
-        // the name path; once it has failed N times, surface a
-        // WARN suggesting run-name configuration. For now the
-        // fallback runs in parallel on the same backoff cycle.
         if matches!(params.run_name_configured, Some(false) | None) {
-            match scan_runs_for_fallback(client, rate_limit, params).await {
-                Ok(Some(run)) => {
-                    if params.run_name_configured.is_none() {
-                        warn!(
-                            "correlation succeeded via fallback (head_sha + dispatched_at). \
-                             Recommend adding `run-name: gcit-${{{{ inputs.gcit_run_id }}}}` \
-                             to the workflow for unambiguous correlation."
-                        );
-                    }
-                    return Ok(CorrelationOutcome {
-                        run_id: run.id.0,
-                        summary: run_to_summary(&run),
-                    });
-                }
-                Ok(None) => { /* no match; backoff and retry */ }
-                Err(e) => {
-                    if !e.is_transient() {
-                        return Err(CorrelationError::Github(e));
-                    }
-                    warn!(error = %e, "transient error during fallback scan");
-                }
+            if let Some(outcome) = scan_head_sha_fallback(client, rate_limit, params).await? {
+                return Ok(outcome);
             }
         }
 
-        // Pull next delay from backon's exponential schedule. None
-        // never fires in practice (without_max_times), but we
-        // saturate at POLL_INTERVAL_MAX as a defense.
-        let next_delay = backoff_iter.next().unwrap_or(POLL_INTERVAL_MAX);
+        sleep_with_cancel_awareness(&mut backoff_iter, effective_deadline, &cancel).await;
+    }
+}
 
-        let now = Instant::now();
-        let sleep_for = if effective_deadline > now {
-            std::cmp::min(next_delay, effective_deadline - now)
-        } else {
-            // Already at deadline; the next iteration's deadline
-            // check will return Timeout.
-            Duration::from_millis(0)
-        };
+/// Compute the effective deadline for this iteration. If drain has
+/// fired, take the lesser of `(normal_deadline, drain_start + DRAIN_TIMEOUT)`.
+/// On the first observation of `cancel.is_cancelled()`, capture the
+/// onset Instant in `drain_start` so subsequent iterations bound the
+/// drain budget by the actual cancel onset rather than recomputing
+/// `now + DRAIN_TIMEOUT` each loop.
+fn compute_effective_deadline(
+    cancel: &CancellationToken,
+    normal_deadline: Instant,
+    drain_start: &mut Option<Instant>,
+) -> Instant {
+    if cancel.is_cancelled() {
+        let onset = *drain_start.get_or_insert_with(Instant::now);
+        std::cmp::min(normal_deadline, onset + DRAIN_TIMEOUT)
+    } else {
+        normal_deadline
+    }
+}
 
-        // Sleep with cancellation awareness so a drain event
-        // immediately re-triggers the deadline computation rather
-        // than waiting through the whole backoff.
-        tokio::select! {
-            _ = tokio::time::sleep(sleep_for) => {}
-            _ = cancel.cancelled() => {
-                // Drain just fired; loop back to recompute the
-                // effective deadline and keep going.
+/// Run one full pagination scan looking for a name-match. Returns
+/// `Ok(Some)` on a single match (correlation succeeded), propagates
+/// the underlying `CorrelationError` on a duplicate-match or a
+/// permanent GitHub error, and returns `Ok(None)` on either NoMatch
+/// or a transient GitHub error so the outer loop falls through to
+/// the fallback / backoff.
+async fn scan_name_match(
+    client: &Client,
+    rate_limit: &super::rate_limit::RateLimitState,
+    params: &CorrelateParams,
+    attempts: u32,
+) -> Result<Option<CorrelationOutcome>, CorrelationError> {
+    match scan_runs_for_match(client, rate_limit, params).await {
+        Ok(ScanResult::SingleMatch(run)) => {
+            debug!(
+                run_id = run.id.0,
+                attempts, "correlation matched on Run.name",
+            );
+            Ok(Some(CorrelationOutcome {
+                run_id: run.id.0,
+                summary: run_to_summary(&run),
+            }))
+        }
+        Ok(ScanResult::DuplicateMatch(ids)) => {
+            warn!(?ids, "duplicate gcit_run_id matches; aborting correlation");
+            Err(CorrelationError::DuplicateMatch {
+                repo: params.repo.clone(),
+                workflow: params.workflow.clone(),
+                gcit_run_id: params.gcit_run_id,
+                run_ids: ids,
+            })
+        }
+        Ok(ScanResult::NoMatch) => Ok(None),
+        Err(e) => {
+            // Permanent errors (Unauthorized/Forbidden/etc.) bypass
+            // the retry loop. Transient retry via the outer backoff.
+            if !e.is_transient() {
+                return Err(CorrelationError::Github(e));
             }
+            warn!(error = %e, attempts, "transient error during correlation scan");
+            Ok(None)
+        }
+    }
+}
+
+/// Fallback path: when the workflow doesn't carry a `run-name`
+/// directive (`run_name_configured == Some(false) | None`), the
+/// name-substring match is impossible. Try `?head_sha=<sha>` plus
+/// `created>=dispatched_at` instead. Emits a one-shot WARN when the
+/// fallback succeeds against an `Unknown` (`None`) config, suggesting
+/// the operator add the `run-name` directive.
+async fn scan_head_sha_fallback(
+    client: &Client,
+    rate_limit: &super::rate_limit::RateLimitState,
+    params: &CorrelateParams,
+) -> Result<Option<CorrelationOutcome>, CorrelationError> {
+    match scan_runs_for_fallback(client, rate_limit, params).await {
+        Ok(Some(run)) => {
+            if params.run_name_configured.is_none() {
+                warn!(
+                    "correlation succeeded via fallback (head_sha + dispatched_at). \
+                     Recommend adding `run-name: gcit-${{{{ inputs.gcit_run_id }}}}` \
+                     to the workflow for unambiguous correlation."
+                );
+            }
+            Ok(Some(CorrelationOutcome {
+                run_id: run.id.0,
+                summary: run_to_summary(&run),
+            }))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => {
+            if !e.is_transient() {
+                return Err(CorrelationError::Github(e));
+            }
+            warn!(error = %e, "transient error during fallback scan");
+            Ok(None)
+        }
+    }
+}
+
+/// Pull the next delay from backon's exponential schedule, cap it
+/// at `effective_deadline - now`, and sleep cancellation-aware so a
+/// drain event immediately re-triggers the deadline computation
+/// rather than waiting through the whole backoff.
+async fn sleep_with_cancel_awareness(
+    backoff_iter: &mut impl Iterator<Item = Duration>,
+    effective_deadline: Instant,
+    cancel: &CancellationToken,
+) {
+    // None never fires in practice (without_max_times), but saturate
+    // at POLL_INTERVAL_MAX as a defense.
+    let next_delay = backoff_iter.next().unwrap_or(POLL_INTERVAL_MAX);
+    let now = Instant::now();
+    let sleep_for = if effective_deadline > now {
+        std::cmp::min(next_delay, effective_deadline - now)
+    } else {
+        Duration::from_millis(0)
+    };
+    tokio::select! {
+        _ = tokio::time::sleep(sleep_for) => {}
+        _ = cancel.cancelled() => {
+            // Drain just fired; the outer loop re-computes the
+            // effective deadline and keeps going.
         }
     }
 }
