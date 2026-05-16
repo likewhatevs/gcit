@@ -161,6 +161,7 @@ pub async fn run_with_factories(
     let root_cancel = CancellationToken::new();
     let last_errors = Arc::new(Mutex::new(BTreeMap::<String, FlowLastError>::new()));
     let hostname = Arc::new(mail::read_hostname_or_default());
+    let source_rate_buckets = Arc::new(StdMutex::new(BTreeMap::new()));
 
     let (respawn_tx, mut respawn_rx) =
         mpsc::channel::<super::respawn::RespawnRequest>(RESPAWN_QUEUE);
@@ -175,6 +176,7 @@ pub async fn run_with_factories(
         state_mirror: Arc::clone(&state_mirror),
         root_cancel: root_cancel.clone(),
         last_errors: Arc::clone(&last_errors),
+        source_rate_buckets: Arc::clone(&source_rate_buckets),
         poll_task_factory,
         dispatch_task_factory,
     };

@@ -194,6 +194,7 @@ mod tests {
             state_mirror,
             root_cancel: CancellationToken::new(),
             last_errors,
+            source_rate_buckets: Arc::new(StdMutex::new(BTreeMap::new())),
             poll_task_factory: no_op_poll_factory(),
             dispatch_task_factory: no_op_dispatch_factory(),
         }

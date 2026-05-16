@@ -496,6 +496,7 @@ mod tests {
             state_mirror: Arc::clone(&state_mirror),
             root_cancel: CancellationToken::new(),
             last_errors: Arc::clone(&last_errors),
+            source_rate_buckets: Arc::new(StdMutex::new(BTreeMap::new())),
             poll_task_factory: panic_poll_factory(),
             dispatch_task_factory: panic_dispatch_factory(),
         };

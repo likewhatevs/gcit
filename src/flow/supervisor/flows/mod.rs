@@ -41,6 +41,17 @@ use super::types::{
 use crate::flow::dispatcher::FlowDispatchParams;
 use crate::flow::poll::{EffectivePoll, PollParams};
 use crate::flow::{TriggerSignal, TRIGGER_QUEUE};
+use crate::git::RateBucket;
+
+/// Politeness floor between consecutive polls against a single
+/// source host across ALL flows that target it. N flows configured
+/// against the same git server (e.g. several mirrors of subtrees on
+/// git.kernel.org) serialize through one per-host `RateBucket` so
+/// the upstream sees at most one poll per `SOURCE_POLITENESS_INTERVAL`
+/// rather than N concurrent polls when jitter happens to align. The
+/// floor is intentionally short — production cadences are 60s/5min,
+/// so 250ms only kicks in for the burst case.
+pub const SOURCE_POLITENESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 mod notifiers;
 mod state;
@@ -133,10 +144,53 @@ pub struct SpawnContext {
     /// `record_last_error` from spawn-time setup failures and by the
     /// per-flow tasks themselves; surfaced via `gcit status`.
     pub(super) last_errors: Arc<Mutex<BTreeMap<String, FlowLastError>>>,
+    /// Per-host source-side rate buckets. Looked up by the source
+    /// URL's host string; shared by every flow that polls the same
+    /// upstream so the host sees at most one poll per
+    /// `SOURCE_POLITENESS_INTERVAL` across the daemon. Process-
+    /// lifetime: a bucket is created on the first spawn for a host
+    /// and never evicted (the entry is one Arc per unique host —
+    /// negligible).
+    pub(super) source_rate_buckets: Arc<StdMutex<BTreeMap<String, Arc<RateBucket>>>>,
     /// Builds the per-flow poll task's future.
     pub(super) poll_task_factory: PollTaskFactory,
     /// Builds the per-flow dispatcher task's future.
     pub(super) dispatch_task_factory: DispatchTaskFactory,
+}
+
+/// Look up or create the per-host source-side rate bucket for a
+/// flow's source URL. The key is the host string when the URL
+/// parses; an unparseable or hostless URL (file://, scp-style ssh)
+/// gets its own per-URL bucket so the lookup never collides
+/// arbitrarily. Held under `StdMutex` because the lookup path
+/// is sync and doesn't cross await points.
+pub(super) fn source_bucket_for_url(
+    map: &Arc<StdMutex<BTreeMap<String, Arc<RateBucket>>>>,
+    url: &str,
+) -> Arc<RateBucket> {
+    let key = extract_host_or_url_as_key(url);
+    let mut guard = map
+        .lock()
+        .expect("source rate-bucket mutex must not be poisoned");
+    guard
+        .entry(key)
+        .or_insert_with(|| Arc::new(RateBucket::new(SOURCE_POLITENESS_INTERVAL)))
+        .clone()
+}
+
+/// Extract the host component from a URL, falling back to the full
+/// URL string when the URL is hostless or unparseable. The fallback
+/// ensures each file:// path / scp-style ssh URL gets its own bucket
+/// rather than colliding under a single sentinel key — different
+/// file:// URLs are different filesystems and shouldn't share a
+/// politeness budget.
+fn extract_host_or_url_as_key(url: &str) -> String {
+    if let Ok(parsed) = url::Url::parse(url) {
+        if let Some(host) = parsed.host_str() {
+            return host.to_string();
+        }
+    }
+    url.to_string()
 }
 
 /// Production `PollTaskFactory`. Boxed once per spawn; the per-cycle
@@ -344,9 +398,15 @@ fn build_poll_params(
         url: flow.source.url.clone(),
         ref_name: flow.source.ref_name.clone(),
         effective_poll: effective,
-        // Source-side rate bucket: deferred to v1. Per-flow jitter
-        // paces the source side.
-        rate_bucket: None,
+        // Per-host politeness bucket. Shared across every flow that
+        // targets the same source host so jitter-aligned bursts
+        // serialize through one bucket rather than hitting upstream
+        // concurrently. See `source_bucket_for_url` + the
+        // `SOURCE_POLITENESS_INTERVAL` const.
+        rate_bucket: Some(source_bucket_for_url(
+            &ctx.source_rate_buckets,
+            &flow.source.url,
+        )),
         octo: Some(cred_resources.octocrab.clone()),
         reqwest: Some(cred_resources.reqwest.clone()),
         last_errors: Arc::clone(&ctx.last_errors),
@@ -536,6 +596,7 @@ mod tests {
             state_mirror: Arc::new(StdMutex::new(State::default())),
             root_cancel: CancellationToken::new(),
             last_errors,
+            source_rate_buckets: Arc::new(StdMutex::new(BTreeMap::new())),
             poll_task_factory: Arc::new(|_, _, _, _, _, _| {
                 panic!(
                     "poll factory invoked unexpectedly: \
@@ -637,5 +698,78 @@ mod tests {
             message.contains("local_mail user:"),
             "notifier-setup message must surface the inner 'local_mail user:' prefix; got: {message}",
         );
+    }
+
+    #[test]
+    fn source_bucket_lookup_returns_shared_arc_for_same_host() {
+        // Two flows targeting the same host must share one Arc. Pin
+        // ptr_eq so a regression that inserted a fresh bucket on
+        // every lookup would surface here as separate Arcs.
+        let map = Arc::new(StdMutex::new(BTreeMap::new()));
+        let a = source_bucket_for_url(&map, "https://git.kernel.org/pub/scm/a.git");
+        let b = source_bucket_for_url(&map, "https://git.kernel.org/pub/scm/b.git");
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "same host must yield the same per-host bucket Arc",
+        );
+    }
+
+    #[test]
+    fn source_bucket_lookup_isolates_distinct_hosts() {
+        // Different hosts get different buckets so a noisy upstream
+        // can't gate the politeness budget of an unrelated host.
+        let map = Arc::new(StdMutex::new(BTreeMap::new()));
+        let a = source_bucket_for_url(&map, "https://git.kernel.org/foo.git");
+        let b = source_bucket_for_url(&map, "https://gitlab.com/bar.git");
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "different hosts must yield distinct per-host buckets",
+        );
+    }
+
+    #[test]
+    fn source_bucket_uses_politeness_interval() {
+        let map = Arc::new(StdMutex::new(BTreeMap::new()));
+        let bucket = source_bucket_for_url(&map, "https://example.com/repo.git");
+        assert_eq!(
+            bucket.min_interval(),
+            SOURCE_POLITENESS_INTERVAL,
+            "per-host bucket must be constructed with the politeness interval constant",
+        );
+    }
+
+    #[test]
+    fn extract_host_returns_host_str_for_standard_url() {
+        assert_eq!(
+            extract_host_or_url_as_key("https://github.com/owner/repo"),
+            "github.com",
+        );
+        assert_eq!(
+            extract_host_or_url_as_key("https://www.git.kernel.org:443/pub"),
+            "www.git.kernel.org",
+        );
+    }
+
+    #[test]
+    fn extract_host_falls_back_to_raw_url_for_hostless_url() {
+        // file:// URLs have no host. Each filesystem path gets its
+        // own bucket key so two different file:// targets don't
+        // share a politeness budget (different disks / mounts).
+        let a = extract_host_or_url_as_key("file:///srv/git/a.git");
+        let b = extract_host_or_url_as_key("file:///srv/git/b.git");
+        assert_ne!(a, b, "different file:// URLs must produce distinct keys");
+    }
+
+    #[test]
+    fn extract_host_falls_back_to_raw_url_for_unparseable_url() {
+        // scp-style ssh URL (git@host:path) isn't a valid url::Url.
+        // The fallback uses the raw string as the key; two callers
+        // with the same scp URL share a bucket, two with different
+        // ones get separate buckets.
+        let a = extract_host_or_url_as_key("git@github.com:owner/repo.git");
+        let b = extract_host_or_url_as_key("git@github.com:owner/repo.git");
+        assert_eq!(a, b, "identical scp-style URLs must share a key");
+        let c = extract_host_or_url_as_key("git@example.com:owner/repo.git");
+        assert_ne!(a, c, "different scp-style URLs must produce distinct keys");
     }
 }
