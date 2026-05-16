@@ -174,62 +174,16 @@ fn log_notify_outcome(
 mod tests {
     use super::*;
     use crate::notify::SkipReason;
+    use crate::test_notifier::RecordingNotifier;
 
-    /// Minimal DynNotifier stub for log_notify_outcome tests.
-    struct StubNotifier {
-        kind: &'static str,
-        id: String,
-    }
-
-    impl DynNotifier for StubNotifier {
-        fn kind(&self) -> &'static str {
-            self.kind
-        }
-        fn id(&self) -> &str {
-            &self.id
-        }
-        fn on_run_start<'a>(
-            &'a self,
-            _ctx: &'a crate::notify::RunContext,
-            _cancel: &'a tokio_util::sync::CancellationToken,
-        ) -> crate::flow::dispatcher::DynNotifyFuture<'a> {
-            Box::pin(async {
-                Ok(NotifyOutcome::Skipped {
-                    reason: SkipReason::NotConfigured,
-                })
-            })
-        }
-        fn on_job_complete<'a>(
-            &'a self,
-            _ctx: &'a crate::notify::RunContext,
-            _job: &'a crate::github::JobResult,
-            _cancel: &'a tokio_util::sync::CancellationToken,
-        ) -> crate::flow::dispatcher::DynNotifyFuture<'a> {
-            Box::pin(async {
-                Ok(NotifyOutcome::Skipped {
-                    reason: SkipReason::NotConfigured,
-                })
-            })
-        }
-        fn on_run_complete<'a>(
-            &'a self,
-            _ctx: &'a crate::notify::RunContext,
-            _summary: &'a crate::github::RunSummary,
-            _cancel: &'a tokio_util::sync::CancellationToken,
-        ) -> crate::flow::dispatcher::DynNotifyFuture<'a> {
-            Box::pin(async {
-                Ok(NotifyOutcome::Skipped {
-                    reason: SkipReason::NotConfigured,
-                })
-            })
-        }
-    }
-
-    fn stub() -> StubNotifier {
-        StubNotifier {
-            kind: "test",
-            id: "stub-1".to_string(),
-        }
+    fn stub() -> RecordingNotifier {
+        RecordingNotifier::stub(
+            "test",
+            "stub-1",
+            NotifyOutcome::Skipped {
+                reason: SkipReason::NotConfigured,
+            },
+        )
     }
 
     /// log_notify_outcome's `Ok(Sent)` arm with `job_id = None` emits

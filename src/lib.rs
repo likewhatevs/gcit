@@ -24,4 +24,6 @@ pub mod mail;
 pub mod notify;
 pub mod state;
 pub mod systemd;
+#[cfg(test)]
+mod test_notifier;
 pub mod util;

@@ -627,73 +627,10 @@ mod tests {
         }
     }
 
-    /// Hand-rolled recording notifier. The `tests/common/recording_notifier.rs`
-    /// helper is gated behind the integration-test crate boundary, so
-    /// in-file unit tests cannot import it.
-    struct UnitRecordingNotifier {
-        kind: &'static str,
-        id: String,
-        on_run_start_calls: tokio::sync::Mutex<usize>,
-    }
-
-    impl UnitRecordingNotifier {
-        fn new(id: impl Into<String>) -> Self {
-            Self {
-                kind: "recording",
-                id: id.into(),
-                on_run_start_calls: tokio::sync::Mutex::new(0),
-            }
-        }
-    }
-
-    impl super::super::DynNotifier for UnitRecordingNotifier {
-        fn kind(&self) -> &'static str {
-            self.kind
-        }
-        fn id(&self) -> &str {
-            &self.id
-        }
-        fn on_run_start<'a>(
-            &'a self,
-            _ctx: &'a crate::notify::RunContext,
-            _cancel: &'a CancellationToken,
-        ) -> super::super::DynNotifyFuture<'a> {
-            Box::pin(async move {
-                *self.on_run_start_calls.lock().await += 1;
-                Ok(crate::notify::NotifyOutcome::Sent {
-                    receipt: "unit-recorded".to_string(),
-                })
-            })
-        }
-        fn on_job_complete<'a>(
-            &'a self,
-            _ctx: &'a crate::notify::RunContext,
-            _job: &'a crate::github::JobResult,
-            _cancel: &'a CancellationToken,
-        ) -> super::super::DynNotifyFuture<'a> {
-            Box::pin(async move {
-                Ok(crate::notify::NotifyOutcome::Sent {
-                    receipt: "unit-recorded".to_string(),
-                })
-            })
-        }
-        fn on_run_complete<'a>(
-            &'a self,
-            _ctx: &'a crate::notify::RunContext,
-            _summary: &'a crate::github::RunSummary,
-            _cancel: &'a CancellationToken,
-        ) -> super::super::DynNotifyFuture<'a> {
-            Box::pin(async move {
-                Ok(crate::notify::NotifyOutcome::Sent {
-                    receipt: "unit-recorded".to_string(),
-                })
-            })
-        }
-    }
-
     #[tokio::test]
     async fn handle_trigger_with_executor_success_fires_on_run_start_via_spawn_fan_out() {
-        let recorder = Arc::new(UnitRecordingNotifier::new("notifier-1"));
+        use crate::test_notifier::{Hook, RecordingNotifier};
+        let recorder = Arc::new(RecordingNotifier::new("notifier-1"));
         let mut params_inner = (*build_test_params(BTreeMap::new())).clone();
         params_inner.notifiers = vec![Arc::clone(&recorder) as Arc<dyn super::super::DynNotifier>];
         let params = Arc::new(params_inner);
@@ -724,7 +661,10 @@ mod tests {
         cancel.cancel();
         while monitors.join_next().await.is_some() {}
 
-        let count = *recorder.on_run_start_calls.lock().await;
-        assert_eq!(count, 1, "on_run_start must fire exactly once");
+        assert_eq!(
+            recorder.count(Hook::RunStart),
+            1,
+            "on_run_start must fire exactly once",
+        );
     }
 }
