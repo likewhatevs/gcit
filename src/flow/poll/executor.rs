@@ -402,4 +402,78 @@ mod tests {
             other => panic!("expected Cancelled, got {other:?}"),
         }
     }
+
+    /// The GithubApi arm has its own `tokio::select!` wrapping
+    /// `github_api::poll`. Mirror the ls_remote_inline test: a
+    /// pre-cancelled token must surface `Cancelled` without ever
+    /// reaching the network round-trip.
+    #[tokio::test]
+    async fn poll_one_github_api_returns_cancelled_variant_on_pre_cancelled_token() {
+        ensure_crypto_provider();
+        let mut params = params_with_url("https://github.com/owner/repo");
+        params.octo = Some(Arc::new(
+            octocrab::Octocrab::builder().build().expect("octocrab"),
+        ));
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut fp: Option<String> = None;
+        let result = poll_one(PollStrategy::GithubApi, &params, &mut fp, &cancel).await;
+        match result {
+            Err(PollCycleError::Cancelled) => {}
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+    }
+
+    /// The Grokmirror arm wraps `grokmirror::fetch_manifest` in its
+    /// own `tokio::select!`. Pin the cancel branch so a SIGHUP that
+    /// fires before the manifest HTTP completes produces `Cancelled`
+    /// rather than `Failed("...timeout...")`.
+    #[tokio::test]
+    async fn poll_one_grokmirror_returns_cancelled_variant_on_pre_cancelled_token() {
+        ensure_crypto_provider();
+        let mut params = params_with_url("https://git.kernel.org/pub/scm/foo.git");
+        params.reqwest = Some(Arc::new(reqwest::Client::new()));
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut fp: Option<String> = None;
+        let result = poll_one(PollStrategy::Grokmirror, &params, &mut fp, &cancel).await;
+        match result {
+            Err(PollCycleError::Cancelled) => {}
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
+    }
+
+    /// `RealPollExecutor::for_url` -> `auto_detect` -> `strategy_label`
+    /// must round-trip to the documented snake_case labels for each
+    /// host. Pin the binding so a regression that swapped two branches
+    /// of auto_detect (or that lost the kind_str entry) surfaces here.
+    #[test]
+    fn real_poll_executor_strategy_label_matches_url_host() {
+        assert_eq!(
+            RealPollExecutor::for_url("https://github.com/owner/repo").strategy_label(),
+            "github_api",
+        );
+        assert_eq!(
+            RealPollExecutor::for_url("https://git.kernel.org/pub/scm/foo.git").strategy_label(),
+            "grokmirror",
+        );
+        assert_eq!(
+            RealPollExecutor::for_url("https://gitlab.example.com/foo.git").strategy_label(),
+            "ls_remote",
+        );
+    }
+
+    /// `RealPollExecutor` must start with no grokmirror fingerprint
+    /// — the first cycle uses `None` as the baseline so the
+    /// fingerprint-changed comparison can't false-positive on the
+    /// first poll. Pin the constructor's initial state.
+    #[tokio::test]
+    async fn real_poll_executor_starts_with_no_grokmirror_fingerprint() {
+        let exec = RealPollExecutor::for_url("https://git.kernel.org/foo.git");
+        let guard = exec.grokmirror_fingerprint.lock().await;
+        assert!(
+            guard.is_none(),
+            "constructor must seed grokmirror_fingerprint as None",
+        );
+    }
 }
