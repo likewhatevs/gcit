@@ -69,3 +69,47 @@ pub async fn trigger_daemon_reload(scope: InstallScope) -> zbus::Result<ReloadOu
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn trigger_daemon_reload_system_scope_short_circuits_without_dbus() {
+        // System scope must NOT touch the D-Bus session bus — the
+        // caller has no elevated rights and a session-bus connect
+        // would either fail or reload the user manager (wrong).
+        // The branch returns Ok(SkippedSystemRequiresRoot) so the
+        // install/uninstall caller can emit the sudo banner without
+        // surfacing a transport error.
+        //
+        // No assertion on session-bus state needed: if the branch ever
+        // started dialing D-Bus the test would either fail in a
+        // headless CI runner (no DBUS_SESSION_BUS_ADDRESS) or reload
+        // the runner's own user manager (visibly wrong). Pin the
+        // Ok variant and the value so a mutation that flipped the
+        // outcome or replaced the short-circuit with a real call
+        // would surface here.
+        let outcome = trigger_daemon_reload(InstallScope::System)
+            .await
+            .expect("System scope must short-circuit without dialing D-Bus");
+        assert_eq!(outcome, ReloadOutcome::SkippedSystemRequiresRoot);
+    }
+
+    #[test]
+    fn reload_outcome_partial_eq_distinguishes_variants() {
+        // Pin that the derived PartialEq doesn't conflate variants —
+        // callers match on `==` (e.g. in install.rs's post-action
+        // banner branch) and would mis-route if PartialEq returned
+        // true across variants.
+        assert_eq!(ReloadOutcome::Reloaded, ReloadOutcome::Reloaded);
+        assert_eq!(
+            ReloadOutcome::SkippedSystemRequiresRoot,
+            ReloadOutcome::SkippedSystemRequiresRoot,
+        );
+        assert_ne!(
+            ReloadOutcome::Reloaded,
+            ReloadOutcome::SkippedSystemRequiresRoot,
+        );
+    }
+}
