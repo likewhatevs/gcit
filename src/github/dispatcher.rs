@@ -199,34 +199,17 @@ pub async fn dispatch(
     params: &DispatchParams,
     cancel: &CancellationToken,
 ) -> Result<DispatchOutcome, GithubErrorKind> {
-    // (a) Validate repo shape before holding any resources.
     let (owner, repo) = split_repo(&params.repo)?;
 
-    // (b) Quota gate: defer if the snapshot says we have no
-    // headroom. One iteration is sufficient — backon's retry
-    // schedule handles repeated failures upstream.
-    //
-    // The defer wait can stretch up to the full GitHub primary
-    // rate-limit window (5000 req/h on a fine-grained PAT means
-    // resets land 60 minutes apart in the worst case). Race against
-    // `cancel` so a SIGTERM or per-flow reload during the wait does
-    // not block the dispatcher thread for an hour.
-    if let Some(wait) = rate_limit.should_defer().await {
-        debug!(?wait, "rate-limit snapshot says defer");
-        tokio::select! {
-            _ = cancel.cancelled() => return Err(GithubErrorKind::Cancelled),
-            _ = tokio::time::sleep(wait) => {}
-        }
-    }
+    wait_for_rate_limit_or_cancel(rate_limit, cancel).await?;
 
-    // (c) Pacing gate: per-credential min-interval bucket so flows
+    // Pacing gate: per-credential min-interval bucket so flows
     // sharing one credential don't gang up at the same instant.
     rate_bucket.acquire().await;
 
-    // Caller-generated correlation id. The flow layer
-    // generates the UUID before rendering inputs so the same value
-    // surfaces in `{{gcit.run_id}}` template renders and in the
-    // dispatch payload.
+    // Caller-generated correlation id. The flow layer generates the
+    // UUID before rendering inputs so the same value surfaces in
+    // `{{gcit.run_id}}` template renders and in the dispatch payload.
     let gcit_run_id = params.gcit_run_id;
     let dispatched_at = Utc::now();
     let payload = build_inputs_payload(&params.rendered_inputs, gcit_run_id);
@@ -239,32 +222,82 @@ pub async fn dispatch(
         "dispatching workflow",
     );
 
-    // (d) Fire via octocrab's low-level `_post` so the response
-    // headers stay accessible (the high-level
-    // WorkflowDispatchBuilder discards them on success). Using
-    // _post lets us call observe_headers on every response
-    // regardless of status.
-    let route = format!(
-        "/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches",
-        owner = owner,
-        repo = repo,
-        workflow = params.workflow,
-    );
-    let route_uri: http::Uri = match route.parse() {
-        Ok(u) => u,
-        Err(e) => {
-            return Err(GithubErrorKind::Unknown {
-                source: anyhow::anyhow!("dispatcher route URI invalid: {e}"),
-            });
-        }
-    };
+    let route_uri = build_dispatch_uri(owner, repo, &params.workflow)?;
     let body = serde_json::json!({
         "ref": params.ref_name,
         "inputs": payload,
     });
-    let send_fut = async { client.octocrab()._post(route_uri, Some(&body)).await };
-    let response = match timeout(client.request_timeout(), send_fut).await {
-        Ok(Ok(r)) => r,
+    let response = send_dispatch_request(client, route_uri, &body, params, rate_limit).await?;
+
+    // Refresh the rate-limit snapshot from response headers before
+    // checking status. Even on error responses GitHub sets
+    // X-RateLimit-*; observe before consuming.
+    rate_limit.observe_headers(response.headers()).await;
+
+    classify_response_or_error(response, client, params, rate_limit).await?;
+
+    Ok(DispatchOutcome {
+        gcit_run_id,
+        dispatched_at,
+        repo: params.repo.clone(),
+        workflow: params.workflow.clone(),
+        ref_name: params.ref_name.clone(),
+    })
+}
+
+/// Quota gate: defer when the snapshot says we have no headroom.
+/// The defer wait can stretch up to the full GitHub primary
+/// rate-limit window (5000 req/h means resets land 60 minutes apart
+/// in the worst case). Races against `cancel` so a SIGTERM or
+/// per-flow reload during the wait does not block the dispatcher
+/// thread for an hour.
+async fn wait_for_rate_limit_or_cancel(
+    rate_limit: &RateLimitState,
+    cancel: &CancellationToken,
+) -> Result<(), GithubErrorKind> {
+    let Some(wait) = rate_limit.should_defer().await else {
+        return Ok(());
+    };
+    debug!(?wait, "rate-limit snapshot says defer");
+    tokio::select! {
+        _ = cancel.cancelled() => Err(GithubErrorKind::Cancelled),
+        _ = tokio::time::sleep(wait) => Ok(()),
+    }
+}
+
+/// Build the workflow_dispatch route URI:
+/// `/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches`.
+fn build_dispatch_uri(
+    owner: &str,
+    repo: &str,
+    workflow: &str,
+) -> Result<http::Uri, GithubErrorKind> {
+    let route = format!("/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches");
+    route
+        .parse::<http::Uri>()
+        .map_err(|e| GithubErrorKind::Unknown {
+            source: anyhow::anyhow!("dispatcher route URI invalid: {e}"),
+        })
+}
+
+/// Fire the workflow_dispatch via octocrab's low-level `_post` so
+/// response headers stay accessible (the high-level
+/// WorkflowDispatchBuilder discards them on success). Wraps the
+/// request in `tokio::time::timeout` so a stalled upstream doesn't
+/// outlast `client.request_timeout()`.
+async fn send_dispatch_request(
+    client: &Client,
+    route_uri: http::Uri,
+    body: &serde_json::Value,
+    params: &DispatchParams,
+    rate_limit: &RateLimitState,
+) -> Result<
+    http::Response<http_body_util::combinators::BoxBody<bytes::Bytes, octocrab::Error>>,
+    GithubErrorKind,
+> {
+    let send_fut = async { client.octocrab()._post(route_uri, Some(body)).await };
+    match timeout(client.request_timeout(), send_fut).await {
+        Ok(Ok(r)) => Ok(r),
         Ok(Err(e)) => {
             let classified = classify(
                 e,
@@ -274,48 +307,42 @@ pub async fn dispatch(
                 None,
                 None,
             );
-            return Err(reclassify_403_via_snapshot(classified, rate_limit).await);
+            Err(reclassify_403_via_snapshot(classified, rate_limit).await)
         }
-        Err(_elapsed) => return Err(timeout_error(client.request_timeout())),
-    };
+        Err(_elapsed) => Err(timeout_error(client.request_timeout())),
+    }
+}
 
-    // (e) Refresh the rate-limit snapshot from response headers
-    // before checking status. Even on error responses GitHub sets
-    // X-RateLimit-* — observe before consuming.
-    rate_limit.observe_headers(response.headers()).await;
-
-    // (f) Map non-success status to GithubErrorKind. Use
-    // octocrab's map_github_error to deserialize the structured
-    // error body, then route through classify.
-    if !response.status().is_success() {
-        // Re-extract status before consuming the response so we
-        // have it for the classify step if octocrab's body parser
-        // fails.
-        let status = response.status();
-        match octocrab::map_github_error(response).await {
-            Ok(_) => unreachable!("non-success response cannot map_github_error to Ok"),
-            Err(e) => {
-                let classified = classify(
-                    e,
-                    client.credential(),
-                    &params.repo,
-                    &params.workflow,
-                    None,
-                    None,
-                );
-                debug!(?status, "dispatch failed; classified error returned");
-                return Err(reclassify_403_via_snapshot(classified, rate_limit).await);
-            }
+/// Map non-success status onto `GithubErrorKind`. Uses octocrab's
+/// `map_github_error` to deserialize the structured error body, then
+/// routes through `classify` + the 403-via-snapshot reclassifier.
+async fn classify_response_or_error(
+    response: http::Response<http_body_util::combinators::BoxBody<bytes::Bytes, octocrab::Error>>,
+    client: &Client,
+    params: &DispatchParams,
+    rate_limit: &RateLimitState,
+) -> Result<(), GithubErrorKind> {
+    if response.status().is_success() {
+        return Ok(());
+    }
+    // Re-extract status before consuming the response so we have it
+    // for the classify step if octocrab's body parser fails.
+    let status = response.status();
+    match octocrab::map_github_error(response).await {
+        Ok(_) => unreachable!("non-success response cannot map_github_error to Ok"),
+        Err(e) => {
+            let classified = classify(
+                e,
+                client.credential(),
+                &params.repo,
+                &params.workflow,
+                None,
+                None,
+            );
+            debug!(?status, "dispatch failed; classified error returned");
+            Err(reclassify_403_via_snapshot(classified, rate_limit).await)
         }
     }
-
-    Ok(DispatchOutcome {
-        gcit_run_id,
-        dispatched_at,
-        repo: params.repo.clone(),
-        workflow: params.workflow.clone(),
-        ref_name: params.ref_name.clone(),
-    })
 }
 
 /// If `classify` returned `Forbidden` AND the rate-limit snapshot
