@@ -601,10 +601,34 @@ async fn cancel_after_completion_returns_sent() {
     )
     .expect("test fixture user is alphanumeric, valid");
 
-    let outcome = n
-        .on_run_complete(&ctx(), &summary(), &cancel)
-        .await
-        .expect("post-acquire cancel must NOT steal a completed write");
+    // Capture state at panic time so any future failure has the
+    // diagnostic context to identify the failure mode:
+    //   - elapsed: <21ms = pre-pipeline (open(2) EMFILE or cancel
+    //     fired before on_run_complete polled); >5s = LOCK_WAIT_DEADLINE
+    //     timeout (impossible without an outside flock holder);
+    //     ~ms = expected happy-path range.
+    //   - cancel_at_panic: true means cancel did fire (expected
+    //     post-sync); false means the cancel-arm shouldn't have won
+    //     and the failure points at a production bug.
+    //   - spool_len: non-zero means the write committed before the
+    //     production code surfaced Err — that's a duplicate-write
+    //     bug (the operator would see the spool entry AND retry
+    //     pressure).
+    let started = Instant::now();
+    let outcome = n.on_run_complete(&ctx(), &summary(), &cancel).await;
+    let elapsed = started.elapsed();
+    let outcome = outcome.unwrap_or_else(|e| {
+        let cancel_at_panic = cancel.is_cancelled();
+        let spool_len = fs::metadata(&spool_path)
+            .map(|m| m.len())
+            .unwrap_or(u64::MAX);
+        panic!(
+            "post-acquire cancel must NOT steal a completed write: \
+             err={e:?} elapsed={elapsed:?} cancel_at_panic={cancel_at_panic} \
+             spool_len={spool_len} spool_path={}",
+            spool_path.display(),
+        )
+    });
 
     assert!(
         matches!(outcome, NotifyOutcome::Sent { .. }),
