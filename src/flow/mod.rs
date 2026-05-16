@@ -192,9 +192,7 @@ mod tests {
             &'a self,
             _ctx: &'a crate::notify::RunContext,
             _cancel: &'a tokio_util::sync::CancellationToken,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>> + Send + 'a>,
-        > {
+        ) -> crate::flow::dispatcher::DynNotifyFuture<'a> {
             Box::pin(async {
                 Ok(NotifyOutcome::Skipped {
                     reason: SkipReason::NotConfigured,
@@ -206,9 +204,7 @@ mod tests {
             _ctx: &'a crate::notify::RunContext,
             _job: &'a crate::github::JobResult,
             _cancel: &'a tokio_util::sync::CancellationToken,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>> + Send + 'a>,
-        > {
+        ) -> crate::flow::dispatcher::DynNotifyFuture<'a> {
             Box::pin(async {
                 Ok(NotifyOutcome::Skipped {
                     reason: SkipReason::NotConfigured,
@@ -220,9 +216,7 @@ mod tests {
             _ctx: &'a crate::notify::RunContext,
             _summary: &'a crate::github::RunSummary,
             _cancel: &'a tokio_util::sync::CancellationToken,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>> + Send + 'a>,
-        > {
+        ) -> crate::flow::dispatcher::DynNotifyFuture<'a> {
             Box::pin(async {
                 Ok(NotifyOutcome::Skipped {
                     reason: SkipReason::NotConfigured,

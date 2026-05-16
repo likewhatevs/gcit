@@ -83,6 +83,19 @@ pub struct FlowDispatchParams {
     pub notifiers: Vec<Arc<dyn DynNotifier>>,
 }
 
+/// Boxed-future return type for the `DynNotifier` lifecycle methods.
+/// Every method returns the same `Pin<Box<dyn Future + Send + 'a>>`
+/// over `Result<NotifyOutcome, NotifyError>`; the alias keeps the
+/// trait + impl signatures readable.
+pub type DynNotifyFuture<'a> = std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
+            > + Send
+            + 'a,
+    >,
+>;
+
 /// Dyn-compatible wrapper over the per-kind `Notifier` impls.
 ///
 /// `crate::notify::Notifier` uses native async-fn-in-trait which is
@@ -96,40 +109,19 @@ pub trait DynNotifier: Send + Sync {
         &'a self,
         ctx: &'a RunContext,
         cancel: &'a CancellationToken,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
-                > + Send
-                + 'a,
-        >,
-    >;
+    ) -> DynNotifyFuture<'a>;
     fn on_job_complete<'a>(
         &'a self,
         ctx: &'a RunContext,
         job: &'a crate::github::JobResult,
         cancel: &'a CancellationToken,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
-                > + Send
-                + 'a,
-        >,
-    >;
+    ) -> DynNotifyFuture<'a>;
     fn on_run_complete<'a>(
         &'a self,
         ctx: &'a RunContext,
         summary: &'a crate::github::RunSummary,
         cancel: &'a CancellationToken,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
-                > + Send
-                + 'a,
-        >,
-    >;
+    ) -> DynNotifyFuture<'a>;
 }
 
 impl<T> DynNotifier for T
@@ -146,14 +138,7 @@ where
         &'a self,
         ctx: &'a RunContext,
         cancel: &'a CancellationToken,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> DynNotifyFuture<'a> {
         Box::pin(crate::notify::Notifier::on_run_start(self, ctx, cancel))
     }
     fn on_job_complete<'a>(
@@ -161,14 +146,7 @@ where
         ctx: &'a RunContext,
         job: &'a crate::github::JobResult,
         cancel: &'a CancellationToken,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> DynNotifyFuture<'a> {
         Box::pin(crate::notify::Notifier::on_job_complete(
             self, ctx, job, cancel,
         ))
@@ -178,14 +156,7 @@ where
         ctx: &'a RunContext,
         summary: &'a crate::github::RunSummary,
         cancel: &'a CancellationToken,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> DynNotifyFuture<'a> {
         Box::pin(crate::notify::Notifier::on_run_complete(
             self, ctx, summary, cancel,
         ))

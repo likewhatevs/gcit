@@ -155,9 +155,7 @@ impl DynNotifier for RecordingNotifier {
         &'a self,
         ctx: &'a RunContext,
         _cancel: &'a CancellationToken,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>> + Send + 'a>,
-    > {
+    ) -> gcit::flow::dispatcher::DynNotifyFuture<'a> {
         let call = NotifyCall {
             hook: NotifyHook::RunStart,
             ctx: ctx.clone(),
@@ -172,9 +170,7 @@ impl DynNotifier for RecordingNotifier {
         ctx: &'a RunContext,
         job: &'a JobResult,
         _cancel: &'a CancellationToken,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>> + Send + 'a>,
-    > {
+    ) -> gcit::flow::dispatcher::DynNotifyFuture<'a> {
         let call = NotifyCall {
             hook: NotifyHook::JobComplete,
             ctx: ctx.clone(),
@@ -189,9 +185,7 @@ impl DynNotifier for RecordingNotifier {
         ctx: &'a RunContext,
         summary: &'a RunSummary,
         _cancel: &'a CancellationToken,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<NotifyOutcome, NotifyError>> + Send + 'a>,
-    > {
+    ) -> gcit::flow::dispatcher::DynNotifyFuture<'a> {
         let call = NotifyCall {
             hook: NotifyHook::RunComplete,
             ctx: ctx.clone(),

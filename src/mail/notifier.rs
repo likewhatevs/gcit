@@ -92,44 +92,22 @@ pub const DEFAULT_SPOOL_DIR: &str = "/var/mail";
 /// future helper, a refactor, or test code that builds a notifier
 /// from raw strings). Mirrors the credential-id defense-in-depth at
 /// `config::credential::IdError`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UserError {
     /// User contains `/`. Would let the spool path escape `/var/mail`.
+    #[error("local_mail.user contains '/' (path traversal); use only A-Z, a-z, 0-9, '_', and '-'")]
     ContainsSlash,
     /// User contains `..`. Path traversal up from `/var/mail`.
+    #[error(
+        "local_mail.user contains '..' (path traversal); use only A-Z, a-z, 0-9, '_', and '-'"
+    )]
     ContainsParentDirectory,
     /// User contains a NUL byte. Path APIs treat NUL as a string
     /// terminator on the C side; rejecting it here keeps the
     /// `<spool_dir>/<user>` join unambiguous.
+    #[error("local_mail.user contains a NUL byte; use only A-Z, a-z, 0-9, '_', and '-'")]
     ContainsNul,
 }
-
-impl UserError {
-    /// Operator-facing description. Used by the supervisor's
-    /// `build_notifiers` error chain when surfacing as
-    /// `last_error`.
-    pub fn message(&self) -> &'static str {
-        match self {
-            UserError::ContainsSlash => {
-                "local_mail.user contains '/' (path traversal); use only A-Z, a-z, 0-9, '_', and '-'"
-            }
-            UserError::ContainsParentDirectory => {
-                "local_mail.user contains '..' (path traversal); use only A-Z, a-z, 0-9, '_', and '-'"
-            }
-            UserError::ContainsNul => {
-                "local_mail.user contains a NUL byte; use only A-Z, a-z, 0-9, '_', and '-'"
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for UserError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.message())
-    }
-}
-
-impl std::error::Error for UserError {}
 
 /// Defense-in-depth check on the `local_mail.user` value. Rejects
 /// substrings that would let the per-user spool path

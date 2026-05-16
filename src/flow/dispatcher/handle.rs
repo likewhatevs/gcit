@@ -657,14 +657,7 @@ mod tests {
             &'a self,
             _ctx: &'a crate::notify::RunContext,
             _cancel: &'a CancellationToken,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
+        ) -> super::super::DynNotifyFuture<'a> {
             Box::pin(async move {
                 *self.on_run_start_calls.lock().await += 1;
                 Ok(crate::notify::NotifyOutcome::Sent {
@@ -677,14 +670,7 @@ mod tests {
             _ctx: &'a crate::notify::RunContext,
             _job: &'a crate::github::JobResult,
             _cancel: &'a CancellationToken,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
+        ) -> super::super::DynNotifyFuture<'a> {
             Box::pin(async move {
                 Ok(crate::notify::NotifyOutcome::Sent {
                     receipt: "unit-recorded".to_string(),
@@ -696,14 +682,7 @@ mod tests {
             _ctx: &'a crate::notify::RunContext,
             _summary: &'a crate::github::RunSummary,
             _cancel: &'a CancellationToken,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<crate::notify::NotifyOutcome, crate::notify::NotifyError>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
+        ) -> super::super::DynNotifyFuture<'a> {
             Box::pin(async move {
                 Ok(crate::notify::NotifyOutcome::Sent {
                     receipt: "unit-recorded".to_string(),
