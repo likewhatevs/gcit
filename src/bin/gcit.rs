@@ -258,16 +258,53 @@ fn main() -> ExitCode {
 }
 
 async fn async_main(listen_fds: Vec<(RawFd, String)>) -> ExitCode {
-    // Custom argument-parsing error path: clap's default exit code is
-    // 2, but gcit pins EX_USAGE=64 for invalid invocations. For
-    // --help/--version (which clap also routes through Error) we keep
-    // clap's exit 0 so `gcit --help | foo` etc. still pipe cleanly.
-    //
-    // Use try_get_matches() rather than Cli::try_parse() so we can
-    // inspect ArgMatches::value_source() afterwards — needed for the
-    // user-scope config default: only override the bottom-default
-    // `/etc/gcit/config.toml` when the operator did NOT pass --config
-    // explicitly.
+    let (cli, config_path) = match parse_cli_and_resolve_config() {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let log_filter = cli.log_filter.clone();
+    let control_socket = cli.control_socket.clone();
+
+    match cli.cmd {
+        None => {
+            eprintln!("gcit: no subcommand. See `gcit --help`.");
+            ExitCode::from(exit::USAGE)
+        }
+        Some(Cmd::Run(args)) => {
+            route_run(
+                args,
+                config_path,
+                control_socket.as_deref(),
+                listen_fds,
+                log_filter.as_deref(),
+            )
+            .await
+        }
+        Some(Cmd::Check) => route_check(&config_path, log_filter.as_deref()),
+        Some(Cmd::Install(a)) => route_install(a, &config_path, log_filter.as_deref()).await,
+        Some(Cmd::Uninstall(a)) => route_uninstall(a, log_filter.as_deref()).await,
+        Some(Cmd::Reload) => route_reload(control_socket.as_deref(), log_filter.as_deref()).await,
+        Some(Cmd::Status(a)) => {
+            route_status(a, control_socket.as_deref(), log_filter.as_deref()).await
+        }
+        Some(Cmd::Trigger(a)) => {
+            route_trigger(a, control_socket.as_deref(), log_filter.as_deref()).await
+        }
+        Some(Cmd::ValidateTemplate(a)) => route_validate_template(a, log_filter.as_deref()),
+        Some(Cmd::Completions(a)) => route_completions(a),
+    }
+}
+
+/// Parse argv via clap, resolve the effective config path (XDG vs
+/// system bottom default), and surface the config-path mismatch hint
+/// for non-root config-consuming subcommands. Returns the parsed Cli
+/// + the resolved config path, or an ExitCode the caller bubbles up.
+///
+/// Custom argument-parsing error path: clap's default exit code is 2,
+/// but gcit pins EX_USAGE=64 for invalid invocations. For --help /
+/// --version (which clap also routes through Error) we keep clap's
+/// exit 0 so `gcit --help | foo` etc. still pipe cleanly.
+fn parse_cli_and_resolve_config() -> Result<(Cli, PathBuf), ExitCode> {
     let mut cmd = Cli::command();
     let matches = match cmd.try_get_matches_from_mut(std::env::args_os()) {
         Ok(m) => m,
@@ -280,9 +317,9 @@ async fn async_main(listen_fds: Vec<(RawFd, String)>) -> ExitCode {
                     | clap::error::ErrorKind::DisplayVersion
                     | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
             ) {
-                return ExitCode::from(exit::OK);
+                return Err(ExitCode::from(exit::OK));
             }
-            return ExitCode::from(exit::USAGE);
+            return Err(ExitCode::from(exit::USAGE));
         }
     };
     let config_explicit = matches!(
@@ -293,58 +330,65 @@ async fn async_main(listen_fds: Vec<(RawFd, String)>) -> ExitCode {
         Ok(c) => c,
         Err(e) => {
             let _ = e.print();
-            return ExitCode::from(exit::USAGE);
+            return Err(ExitCode::from(exit::USAGE));
         }
     };
+    let config_path = resolve_effective_config_path(&cli, config_explicit);
+    emit_config_mismatch_hint_if_applicable(&cli, config_explicit, &config_path);
+    Ok((cli, config_path))
+}
 
-    let cmd_name = cli.cmd.as_ref();
-
-    // user-scope config default: when --config wasn't passed
-    // explicitly, override the bottom default `/etc/gcit/config.toml`
-    // with the XDG path in two cases. (1) Install/Uninstall called
-    // with `--user`: the install is explicitly user-scoped regardless
-    // of who runs it. (2) Any non-install subcommand invoked by a
-    // non-root euid: a user shell running `gcit run --foreground` /
-    // `gcit check` / `gcit status` etc. without --config defaults to
-    // the operator's XDG config rather than the system one. Explicit
-    // --config passes through unchanged. `user_default_config` returns
-    // None when neither XDG_CONFIG_HOME nor HOME are set, in which
-    // case we keep the system bottom default.
-    //
-    // SAFETY: geteuid() is async-signal-safe and always succeeds. The
-    // same unsafe-call pattern is used in cli::install, cli::check,
-    // and control::server.
+/// User-scope config default: when --config wasn't passed explicitly,
+/// override the bottom default `/etc/gcit/config.toml` with the XDG
+/// path in two cases. (1) Install/Uninstall called with `--user`: the
+/// install is explicitly user-scoped regardless of who runs it. (2)
+/// Any non-install subcommand invoked by a non-root euid: a user
+/// shell running `gcit run --foreground` / `gcit check` / `gcit status`
+/// etc. without --config defaults to the operator's XDG config rather
+/// than the system one. Explicit --config passes through unchanged.
+/// `user_default_config` returns None when neither XDG_CONFIG_HOME
+/// nor HOME are set; we keep the system bottom default in that case.
+fn resolve_effective_config_path(cli: &Cli, config_explicit: bool) -> PathBuf {
+    // SAFETY: geteuid() is async-signal-safe and always succeeds.
     let euid_is_root = unsafe { libc::geteuid() } == 0;
     let user_install_scope = matches!(
-        cmd_name,
+        cli.cmd.as_ref(),
         Some(Cmd::Install(InstallArgs { user: true, .. }))
             | Some(Cmd::Uninstall(UninstallArgs { user: true, .. })),
     );
-    let config_path = if !config_explicit && (user_install_scope || !euid_is_root) {
+    if !config_explicit && (user_install_scope || !euid_is_root) {
         user_default_config().unwrap_or_else(|| cli.config.clone())
     } else {
         cli.config.clone()
-    };
+    }
+}
 
-    // Config-path mismatch hint: when the non-root-euid swap picked the
-    // XDG path BUT that path does not exist, AND the system bottom
-    // default `/etc/gcit/config.toml` DOES exist, an operator running
-    // `gcit check` as themselves to validate a system install would
-    // otherwise see a "no such file" error against an XDG path they
-    // did not configure. The swap is silent; this hint makes the
-    // mismatch visible. Skip for explicit --config (the operator is
-    // driving) and for `--user` install/uninstall (where the XDG path
-    // not existing is normal — the install is about to create it).
-    //
-    // Only fire for subcommands that actually load the config —
-    // `Run`, `Check`, `Install`. The control-socket subcommands
-    // (`Reload`, `Status`, `Trigger`) talk to the daemon, not to the
-    // config file; `ValidateTemplate` reads only the template; and
-    // `Completions` writes shell-completion scripts. Emitting the
-    // hint for those would be noise.
+/// Config-path mismatch hint: when the non-root-euid swap picked the
+/// XDG path BUT that path does not exist, AND the system bottom
+/// default `/etc/gcit/config.toml` DOES exist, an operator running
+/// `gcit check` as themselves to validate a system install would
+/// otherwise see a "no such file" error against an XDG path they did
+/// not configure. The swap is silent; this hint makes the mismatch
+/// visible. Skip for explicit --config (operator is driving) and for
+/// `--user` install/uninstall (XDG path not existing is normal — the
+/// install is about to create it).
+///
+/// Only fires for subcommands that actually load the config — `Run`,
+/// `Check`, `Install`. The control-socket subcommands (`Reload`,
+/// `Status`, `Trigger`) talk to the daemon, not to the config file;
+/// `ValidateTemplate` reads only the template; `Completions` writes
+/// shell-completion scripts. Emitting the hint for those would be
+/// noise.
+fn emit_config_mismatch_hint_if_applicable(cli: &Cli, config_explicit: bool, config_path: &Path) {
+    let euid_is_root = unsafe { libc::geteuid() } == 0;
+    let user_install_scope = matches!(
+        cli.cmd.as_ref(),
+        Some(Cmd::Install(InstallArgs { user: true, .. }))
+            | Some(Cmd::Uninstall(UninstallArgs { user: true, .. })),
+    );
     let swap_fired = !config_explicit && !euid_is_root && !user_install_scope;
     let config_consuming = matches!(
-        cmd_name,
+        cli.cmd.as_ref(),
         Some(Cmd::Run(_)) | Some(Cmd::Check) | Some(Cmd::Install(_))
     );
     if config_consuming
@@ -359,111 +403,120 @@ async fn async_main(listen_fds: Vec<(RawFd, String)>) -> ExitCode {
             config_path.display(),
         );
     }
+}
 
-    // Initialize tracing per-subcommand. `gcit run` is the only
-    // subcommand that selects between foreground (stderr) and daemon
-    // (journald-only) layers; every other subcommand prints to stderr
-    // and uses foreground=true unconditionally. A bad --log-filter
-    // here is EX_CONFIG=78 because the only way to reach this branch
-    // with an invalid value is an operator typo on the CLI.
-    let log_filter = cli.log_filter.as_deref();
-    let init_log = |foreground: bool| -> Result<(), ExitCode> {
-        if let Err(e) = gcit::log::init(log_filter, foreground) {
-            eprintln!("gcit: log init failed: {}", e);
-            return Err(ExitCode::from(exit::CONFIG));
-        }
-        Ok(())
+/// Initialize tracing. `gcit run` is the only subcommand that selects
+/// between foreground (stderr) and daemon (journald-only) layers;
+/// every other subcommand prints to stderr and uses foreground=true.
+/// A bad --log-filter is EX_CONFIG=78 — the only way to reach this
+/// branch with an invalid value is an operator typo on the CLI.
+fn init_log_or_fail(log_filter: Option<&str>, foreground: bool) -> Result<(), ExitCode> {
+    if let Err(e) = gcit::log::init(log_filter, foreground) {
+        eprintln!("gcit: log init failed: {}", e);
+        return Err(ExitCode::from(exit::CONFIG));
+    }
+    Ok(())
+}
+
+async fn route_run(
+    args: RunArgs,
+    config_path: PathBuf,
+    control_socket: Option<&Path>,
+    listen_fds: Vec<(RawFd, String)>,
+    log_filter: Option<&str>,
+) -> ExitCode {
+    if let Err(code) = init_log_or_fail(log_filter, args.foreground) {
+        return code;
+    }
+    let control_socket = resolve_socket(control_socket);
+    let params = gcit::flow::supervisor::DaemonParams {
+        config_path,
+        default_control_socket: control_socket,
+        listen_fds,
     };
-
-    match cli.cmd {
-        None => {
-            eprintln!("gcit: no subcommand. See `gcit --help`.");
-            ExitCode::from(exit::USAGE)
-        }
-        Some(Cmd::Run(args)) => {
-            // Daemon entry. Foreground is opt-in; without it gcit
-            // initializes the journald layer and exits if journald is
-            // unreachable (logs from a misconfigured daemon must NOT
-            // silently route to stderr that nothing reads).
-            if let Err(code) = init_log(args.foreground) {
-                return code;
-            }
-            let control_socket = resolve_socket(cli.control_socket.as_deref());
-            let params = gcit::flow::supervisor::DaemonParams {
-                config_path: config_path.clone(),
-                default_control_socket: control_socket,
-                listen_fds,
-            };
-            match gcit::flow::run_daemon(params).await {
-                Ok(()) => ExitCode::from(exit::OK),
-                Err(e) => {
-                    eprintln!("gcit run: {e}");
-                    ExitCode::from(exit::SOFTWARE)
-                }
-            }
-        }
-        Some(Cmd::Check) => {
-            if let Err(code) = init_log(true) {
-                return code;
-            }
-            cli::check::run(&config_path)
-        }
-        Some(Cmd::Install(a)) => {
-            if let Err(code) = init_log(true) {
-                return code;
-            }
-            let scope = pick_scope(a.user, a.system);
-            cli::install::run(&config_path, scope, !a.non_interactive, a.force, a.dry_run).await
-        }
-        Some(Cmd::Uninstall(a)) => {
-            if let Err(code) = init_log(true) {
-                return code;
-            }
-            let scope = pick_scope(a.user, a.system);
-            cli::uninstall::run(scope, a.force).await
-        }
-        Some(Cmd::Reload) => {
-            if let Err(code) = init_log(true) {
-                return code;
-            }
-            let path = resolve_socket(cli.control_socket.as_deref());
-            cli::reload::run(&path).await
-        }
-        Some(Cmd::Status(a)) => {
-            if let Err(code) = init_log(true) {
-                return code;
-            }
-            let path = resolve_socket(cli.control_socket.as_deref());
-            cli::status::run(&path, a.flow, a.format).await
-        }
-        Some(Cmd::Trigger(a)) => {
-            if let Err(code) = init_log(true) {
-                return code;
-            }
-            let path = resolve_socket(cli.control_socket.as_deref());
-            cli::trigger::run(&path, a.flow, a.dry_run).await
-        }
-        Some(Cmd::ValidateTemplate(a)) => {
-            if let Err(code) = init_log(true) {
-                return code;
-            }
-            cli::validate_template::run(&a.template, a.kind)
-        }
-        Some(Cmd::Completions(a)) => {
-            // Completions go to stdout. The hint to stderr tells
-            // operators where to redirect the output — distinct stream
-            // so the hint never contaminates the generated script when
-            // piped to a file.
-            let mut cmd = Cli::command();
-            clap_complete::generate(a.shell, &mut cmd, "gcit", &mut std::io::stdout());
-            eprintln!(
-                "gcit: {} completion script written to stdout. {}",
-                a.shell,
-                completions_install_hint(a.shell),
-            );
-            ExitCode::from(exit::OK)
+    match gcit::flow::run_daemon(params).await {
+        Ok(()) => ExitCode::from(exit::OK),
+        Err(e) => {
+            eprintln!("gcit run: {e}");
+            ExitCode::from(exit::SOFTWARE)
         }
     }
+}
+
+fn route_check(config_path: &Path, log_filter: Option<&str>) -> ExitCode {
+    if let Err(code) = init_log_or_fail(log_filter, true) {
+        return code;
+    }
+    cli::check::run(config_path)
+}
+
+async fn route_install(a: InstallArgs, config_path: &Path, log_filter: Option<&str>) -> ExitCode {
+    if let Err(code) = init_log_or_fail(log_filter, true) {
+        return code;
+    }
+    let scope = pick_scope(a.user, a.system);
+    cli::install::run(config_path, scope, !a.non_interactive, a.force, a.dry_run).await
+}
+
+async fn route_uninstall(a: UninstallArgs, log_filter: Option<&str>) -> ExitCode {
+    if let Err(code) = init_log_or_fail(log_filter, true) {
+        return code;
+    }
+    let scope = pick_scope(a.user, a.system);
+    cli::uninstall::run(scope, a.force).await
+}
+
+async fn route_reload(control_socket: Option<&Path>, log_filter: Option<&str>) -> ExitCode {
+    if let Err(code) = init_log_or_fail(log_filter, true) {
+        return code;
+    }
+    let path = resolve_socket(control_socket);
+    cli::reload::run(&path).await
+}
+
+async fn route_status(
+    a: StatusArgs,
+    control_socket: Option<&Path>,
+    log_filter: Option<&str>,
+) -> ExitCode {
+    if let Err(code) = init_log_or_fail(log_filter, true) {
+        return code;
+    }
+    let path = resolve_socket(control_socket);
+    cli::status::run(&path, a.flow, a.format).await
+}
+
+async fn route_trigger(
+    a: TriggerArgs,
+    control_socket: Option<&Path>,
+    log_filter: Option<&str>,
+) -> ExitCode {
+    if let Err(code) = init_log_or_fail(log_filter, true) {
+        return code;
+    }
+    let path = resolve_socket(control_socket);
+    cli::trigger::run(&path, a.flow, a.dry_run).await
+}
+
+fn route_validate_template(a: ValidateTemplateArgs, log_filter: Option<&str>) -> ExitCode {
+    if let Err(code) = init_log_or_fail(log_filter, true) {
+        return code;
+    }
+    cli::validate_template::run(&a.template, a.kind)
+}
+
+/// Completions go to stdout. The hint to stderr tells operators where
+/// to redirect the output — distinct stream so the hint never
+/// contaminates the generated script when piped to a file.
+fn route_completions(a: CompletionsArgs) -> ExitCode {
+    let mut cmd = Cli::command();
+    clap_complete::generate(a.shell, &mut cmd, "gcit", &mut std::io::stdout());
+    eprintln!(
+        "gcit: {} completion script written to stdout. {}",
+        a.shell,
+        completions_install_hint(a.shell),
+    );
+    ExitCode::from(exit::OK)
 }
 
 /// Per-shell install hint for `gcit completions <SHELL>`. The hint
