@@ -29,7 +29,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use super::protocol::{Request, Response, MAX_FRAME_LEN, READ_TIMEOUT_SECS};
+use super::build_codec;
+use super::protocol::{Request, Response, READ_TIMEOUT_SECS};
 
 /// Reload-rate-limit window — 1 per second across all peers. The
 /// handler holds an `Arc<Mutex<Option<Instant>>>` of the
@@ -205,12 +206,7 @@ where
         return Ok(());
     }
 
-    let codec = LengthDelimitedCodec::builder()
-        .max_frame_length(MAX_FRAME_LEN)
-        .length_field_type::<u32>()
-        .big_endian()
-        .new_codec();
-    let mut framed = Framed::new(stream, codec);
+    let mut framed = Framed::new(stream, build_codec());
 
     loop {
         // READ_TIMEOUT_SECS-deadline on each frame guards against

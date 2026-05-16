@@ -14,7 +14,8 @@ use tokio::net::UnixStream;
 use tokio::time::timeout;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use super::protocol::{Request, Response, MAX_FRAME_LEN, READ_TIMEOUT_SECS};
+use super::build_codec;
+use super::protocol::{Request, Response, READ_TIMEOUT_SECS};
 
 /// One-shot control client.
 ///
@@ -28,13 +29,8 @@ impl Client {
     /// Connect to the daemon's control socket at `path`.
     pub async fn connect(path: &Path) -> std::io::Result<Self> {
         let stream = UnixStream::connect(path).await?;
-        let codec = LengthDelimitedCodec::builder()
-            .max_frame_length(MAX_FRAME_LEN)
-            .length_field_type::<u32>()
-            .big_endian()
-            .new_codec();
         Ok(Self {
-            framed: Framed::new(stream, codec),
+            framed: Framed::new(stream, build_codec()),
         })
     }
 

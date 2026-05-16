@@ -14,3 +14,19 @@ pub mod server;
 pub use client::Client;
 pub use protocol::{Request, Response, MAX_FRAME_LEN, READ_TIMEOUT_SECS};
 pub use server::{serve, Handler, RELOAD_WINDOW};
+
+use tokio_util::codec::LengthDelimitedCodec;
+
+/// Build the wire codec used by every control-channel peer (client,
+/// server, and the test fake-daemon harness). Centralising the
+/// `max_frame_length` cap, the `u32` length-field type, and the
+/// big-endian byte order in one place keeps the three call sites from
+/// drifting on any of those parameters — a frame written by one peer
+/// could otherwise be silently rejected by another.
+pub fn build_codec() -> LengthDelimitedCodec {
+    LengthDelimitedCodec::builder()
+        .max_frame_length(MAX_FRAME_LEN)
+        .length_field_type::<u32>()
+        .big_endian()
+        .new_codec()
+}

@@ -21,10 +21,10 @@ use futures_util::{SinkExt, StreamExt};
 use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::task::JoinHandle;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio_util::codec::Framed;
 use tokio_util::sync::CancellationToken;
 
-use gcit::control::{Request, Response, MAX_FRAME_LEN};
+use gcit::control::{build_codec, Request, Response};
 
 /// Scripted response factory: given an incoming Request, returns the
 /// Response the fake daemon should write back. Boxed and `Arc`-shared
@@ -113,12 +113,7 @@ impl FakeDaemon {
 /// the read so a `FakeDaemon::shutdown()` mid-test does not wedge on
 /// a peer that opened the socket but never wrote.
 async fn handle_connection(stream: UnixStream, script: ResponseScript, cancel: CancellationToken) {
-    let codec = LengthDelimitedCodec::builder()
-        .max_frame_length(MAX_FRAME_LEN)
-        .length_field_type::<u32>()
-        .big_endian()
-        .new_codec();
-    let mut framed = Framed::new(stream, codec);
+    let mut framed = Framed::new(stream, build_codec());
 
     let frame = tokio::select! {
         _ = cancel.cancelled() => return,
