@@ -122,100 +122,38 @@ pub async fn run(
     force: bool,
     dry_run: bool,
 ) -> ExitCode {
-    // Parse + validate config first. If the config doesn't load, we
-    // cannot guide the user through the rest of the wizard.
-    let cfg = match config::load(config_path) {
+    let cfg = match load_config_or_print(config_path) {
         Ok(c) => c,
-        Err(errors) => {
-            for e in &errors {
-                eprintln!("{}", e);
-            }
-            return ExitCode::from(exit::CONFIG);
-        }
+        Err(code) => return code,
     };
 
-    // --user + local_mail: reject. /var/mail group access requires a
-    // system-managed static user; the per-user systemd manager cannot
-    // useradd or join the `mail` group. Surfacing this at install time
-    // prevents a silently-broken --user install for local_mail flows.
-    // Applies to dry-run too: the rendered unit reflects what install
-    // would write, and that combination is not installable.
-    let has_local_mail = cfg.flow.iter().any(|f| {
-        f.destination
-            .iter()
-            .any(|d| matches!(d, Destination::LocalMail(_)))
-    });
-    if scope == InstallScope::User && has_local_mail {
-        eprintln!(
-            "gcit install --user: configuration uses `local_mail` destination(s) but \
-             /var/mail/<user> requires the static `mail` group, which the per-user systemd \
-             manager cannot grant. Re-run with --system, or remove the local_mail \
-             destinations from the config."
-        );
-        return ExitCode::from(exit::USAGE);
+    let has_local_mail = has_local_mail_destination(&cfg);
+    if let Err(code) = reject_user_plus_local_mail(scope, has_local_mail) {
+        return code;
     }
 
-    // Resolve the install-time gcit binary so the rendered systemd
-    // unit's ExecStart and ExecReload point at THIS binary, not at a
-    // hardcoded /usr/bin/gcit (the previous value, which broke
-    // --user installs from ~/.cargo/bin/gcit). std::env::current_exe()
-    // returns the absolute path the kernel exec'd; ProtectSystem=strict
-    // in the unit makes the path immutable from the daemon's
-    // perspective so the path the operator records here is the path
-    // they get at runtime.
-    let binary_path = match std::env::current_exe() {
+    let binary_path = match resolve_install_binary_path() {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!(
-                "gcit install: cannot resolve current_exe() for ExecStart= path: {}",
-                e
-            );
-            return ExitCode::from(exit::OSERR);
-        }
+        Err(code) => return code,
     };
 
-    // --dry-run short-circuit: render the service unit and print to
-    // stdout. Nothing else — no credential walkthrough, no path
-    // preview, no manifest, no daemon-reload — so callers can pipe
-    // stdout directly into `systemd-analyze security`. Preceding
-    // validation (config load, --user+local_mail rejection,
-    // current_exe) still runs so a bad config / environment fails
-    // fast before anything is rendered. home_dir / install_paths are
-    // deliberately NOT resolved here — dry-run does not write to disk
-    // so it must not require $HOME to be set.
     if dry_run {
-        let unit = render_service_unit(&cfg, scope, &binary_path);
-        // print! (not println!): render_service_unit's output already
-        // ends with `WantedBy=default.target\n` (see systemd::unit at
-        // the bottom of render_service_unit). println! would append a
-        // second \n and produce a stray blank line that systemd-analyze
-        // tolerates but that complicates byte-exact diffs against an
-        // installed unit.
-        print!("{}", unit);
-        return ExitCode::from(exit::OK);
+        return do_dry_run(&cfg, scope, &binary_path);
     }
 
-    let home = match home_dir() {
-        Some(h) => h,
-        None => {
-            eprintln!("gcit install: cannot resolve $HOME");
-            return ExitCode::from(exit::USAGE);
-        }
+    let paths = match resolve_install_paths_or_print(scope) {
+        Ok(p) => p,
+        Err(code) => return code,
     };
-    let paths = install_paths(scope, &home);
 
-    // Step 1: credential walkthrough.
     print_credential_walkthrough(&cfg, &paths, scope);
 
-    // Step 2: local mail spool check. Warning only; the operator can
-    // fix it before starting the service.
     if has_local_mail {
         print_local_mail_check(&cfg);
     }
 
-    // Step 3: path preview + confirmation. Build the outputs (which
-    // reads cfg.source_path) before printing so a missing source file
-    // fails fast.
+    // Build outputs (which reads cfg.source_path) BEFORE printing the
+    // path preview so a missing source file fails fast.
     let outputs = match build_outputs(&cfg, scope, &paths, &binary_path) {
         Ok(o) => o,
         Err(e) => {
@@ -225,68 +163,23 @@ pub async fn run(
     };
     print_path_preview(&paths, &outputs, has_local_mail);
 
-    // Idempotency: refuse silent overwrite of any existing managed
-    // file.
     if !force {
-        let existing: Vec<&PathBuf> = outputs
-            .iter()
-            .map(|o| &o.path)
-            .filter(|p| p.exists())
-            .collect();
-        if !existing.is_empty() {
-            eprintln!(
-                "\ngcit install: refusing silent overwrite. The following file(s) already exist:"
-            );
-            for p in existing {
-                eprintln!("  {}", p.display());
-            }
-            eprintln!("Re-run with `--force` to overwrite, or `gcit uninstall` first.");
-            return ExitCode::from(exit::CONFIG);
+        if let Err(code) = refuse_silent_overwrite(&outputs) {
+            return code;
         }
     }
 
     if interactive {
-        print!("\nProceed? [y/N] ");
-        if let Err(e) = io::stdout().flush() {
-            // stdout broken; we cannot prompt — abort safely without
-            // writing anything. Surface the I/O failure as EX_OSERR
-            // so a wrapper script (CI, packager) can distinguish a
-            // broken environment from an operator declining the
-            // prompt (which exits OK below).
-            eprintln!("gcit install: stdout flush failed during prompt: {}", e);
-            return ExitCode::from(exit::OSERR);
-        }
-        let mut answer = String::new();
-        if let Err(e) = io::stdin().read_line(&mut answer) {
-            eprintln!("gcit install: stdin read failed during prompt: {}", e);
-            return ExitCode::from(exit::OSERR);
-        }
-        let answer = answer.trim();
-        if !matches!(answer, "y" | "Y" | "yes" | "YES" | "Yes") {
-            // Operator changed their mind — not a failure.
-            println!("install cancelled; nothing written.");
-            return ExitCode::from(exit::OK);
+        if let Err(code) = confirm_with_operator() {
+            return code;
         }
     }
 
-    // Step 4a: create the static `gcit` user when local_mail is
-    // present + scope is system. `gcit install` owns this lifecycle
-    // so the unit's `User=gcit, Group=mail` has a real account to
-    // bind to. The --user + local_mail combination was already
-    // rejected above, so this only fires for --system.
-    let user_created_by_install = if has_local_mail && matches!(scope, InstallScope::System) {
-        match ensure_static_user(STATIC_USER) {
-            Ok(created) => created,
-            Err(e) => {
-                eprintln!("gcit install: useradd failed: {}", e);
-                return ExitCode::from(exit::OSERR);
-            }
-        }
-    } else {
-        false
+    let user_created_by_install = match ensure_static_user_if_local_mail(has_local_mail, scope) {
+        Ok(created) => created,
+        Err(code) => return code,
     };
 
-    // Step 4b: write files + manifest.
     let manifest = match write_outputs(
         &outputs,
         &paths.manifest,
@@ -305,16 +198,181 @@ pub async fn run(
         paths.manifest.display()
     );
 
-    // daemon-reload on the user session bus (or skip with hint for
-    // --system). We're already inside the binary's tokio runtime;
-    // await directly.
+    log_daemon_reload_outcome(scope).await;
+
+    print_post_install(scope);
+
+    ExitCode::from(exit::OK)
+}
+
+/// Parse + validate config. On Err, prints every diagnostic to stderr
+/// and returns `EX_CONFIG=78`. Surfaces every error rather than
+/// short-circuiting on the first so an operator with multiple typos
+/// sees the full set in one pass.
+fn load_config_or_print(config_path: &Path) -> Result<Config, ExitCode> {
+    match config::load(config_path) {
+        Ok(c) => Ok(c),
+        Err(errors) => {
+            for e in &errors {
+                eprintln!("{}", e);
+            }
+            Err(ExitCode::from(exit::CONFIG))
+        }
+    }
+}
+
+fn has_local_mail_destination(cfg: &Config) -> bool {
+    cfg.flow.iter().any(|f| {
+        f.destination
+            .iter()
+            .any(|d| matches!(d, Destination::LocalMail(_)))
+    })
+}
+
+/// --user + local_mail: reject. /var/mail group access requires a
+/// system-managed static user; the per-user systemd manager cannot
+/// useradd or join the `mail` group. Surfacing this at install time
+/// prevents a silently-broken --user install for local_mail flows.
+/// Applies to dry-run too: the rendered unit reflects what install
+/// would write, and that combination is not installable.
+fn reject_user_plus_local_mail(scope: InstallScope, has_local_mail: bool) -> Result<(), ExitCode> {
+    if scope == InstallScope::User && has_local_mail {
+        eprintln!(
+            "gcit install --user: configuration uses `local_mail` destination(s) but \
+             /var/mail/<user> requires the static `mail` group, which the per-user systemd \
+             manager cannot grant. Re-run with --system, or remove the local_mail \
+             destinations from the config."
+        );
+        return Err(ExitCode::from(exit::USAGE));
+    }
+    Ok(())
+}
+
+/// Resolve the install-time gcit binary so the rendered systemd unit's
+/// ExecStart and ExecReload point at THIS binary, not at a hardcoded
+/// `/usr/bin/gcit`. `current_exe()` returns the absolute path the
+/// kernel exec'd; `ProtectSystem=strict` in the unit makes that path
+/// immutable from the daemon's perspective.
+fn resolve_install_binary_path() -> Result<PathBuf, ExitCode> {
+    match std::env::current_exe() {
+        Ok(p) => Ok(p),
+        Err(e) => {
+            eprintln!(
+                "gcit install: cannot resolve current_exe() for ExecStart= path: {}",
+                e
+            );
+            Err(ExitCode::from(exit::OSERR))
+        }
+    }
+}
+
+/// Render the service unit to stdout. No credential walkthrough, no
+/// path preview, no manifest, no daemon-reload — callers can pipe
+/// stdout directly into `systemd-analyze security`. Preceding
+/// validation still runs in `run()` so a bad config / environment
+/// fails fast before anything is rendered. `home_dir` / `install_paths`
+/// are deliberately NOT resolved — dry-run does not write to disk so
+/// it must not require $HOME to be set.
+fn do_dry_run(cfg: &Config, scope: InstallScope, binary_path: &Path) -> ExitCode {
+    let unit = render_service_unit(cfg, scope, binary_path);
+    // print! (not println!): render_service_unit's output already
+    // ends with `WantedBy=default.target\n`. println! would append a
+    // second \n and produce a stray blank line that systemd-analyze
+    // tolerates but that complicates byte-exact diffs against an
+    // installed unit.
+    print!("{}", unit);
+    ExitCode::from(exit::OK)
+}
+
+fn resolve_install_paths_or_print(scope: InstallScope) -> Result<InstallPaths, ExitCode> {
+    match home_dir() {
+        Some(h) => Ok(install_paths(scope, &h)),
+        None => {
+            eprintln!("gcit install: cannot resolve $HOME");
+            Err(ExitCode::from(exit::USAGE))
+        }
+    }
+}
+
+/// Without `--force`, refuse silent overwrite of any existing managed
+/// file. Surfaces every colliding path in one pass so the operator can
+/// fix them all (or pass --force) without re-running the wizard.
+fn refuse_silent_overwrite(outputs: &[OutputFile]) -> Result<(), ExitCode> {
+    let existing: Vec<&PathBuf> = outputs
+        .iter()
+        .map(|o| &o.path)
+        .filter(|p| p.exists())
+        .collect();
+    if existing.is_empty() {
+        return Ok(());
+    }
+    eprintln!("\ngcit install: refusing silent overwrite. The following file(s) already exist:");
+    for p in existing {
+        eprintln!("  {}", p.display());
+    }
+    eprintln!("Re-run with `--force` to overwrite, or `gcit uninstall` first.");
+    Err(ExitCode::from(exit::CONFIG))
+}
+
+/// Print the `Proceed? [y/N]` prompt and read stdin. Empty / non-`y*`
+/// answers exit OK (operator changed their mind — not a failure).
+/// stdout/stdin I/O failures surface as EX_OSERR so wrapper scripts
+/// can distinguish a broken environment from an operator decline.
+fn confirm_with_operator() -> Result<(), ExitCode> {
+    print!("\nProceed? [y/N] ");
+    if let Err(e) = io::stdout().flush() {
+        eprintln!("gcit install: stdout flush failed during prompt: {}", e);
+        return Err(ExitCode::from(exit::OSERR));
+    }
+    let mut answer = String::new();
+    if let Err(e) = io::stdin().read_line(&mut answer) {
+        eprintln!("gcit install: stdin read failed during prompt: {}", e);
+        return Err(ExitCode::from(exit::OSERR));
+    }
+    let answer = answer.trim();
+    if !matches!(answer, "y" | "Y" | "yes" | "YES" | "Yes") {
+        println!("install cancelled; nothing written.");
+        return Err(ExitCode::from(exit::OK));
+    }
+    Ok(())
+}
+
+/// Create the static `gcit` user when local_mail is present and the
+/// scope is system. `gcit install` owns this lifecycle so the unit's
+/// `User=gcit, Group=mail` has a real account to bind to. The
+/// `--user` combined with local_mail was already rejected upstream,
+/// so this only fires for `--system`.
+///
+/// Returns whether a fresh user was actually created (so the manifest
+/// can record it for `gcit uninstall` to clean up later).
+fn ensure_static_user_if_local_mail(
+    has_local_mail: bool,
+    scope: InstallScope,
+) -> Result<bool, ExitCode> {
+    if !(has_local_mail && matches!(scope, InstallScope::System)) {
+        return Ok(false);
+    }
+    match ensure_static_user(STATIC_USER) {
+        Ok(created) => Ok(created),
+        Err(e) => {
+            eprintln!("gcit install: useradd failed: {}", e);
+            Err(ExitCode::from(exit::OSERR))
+        }
+    }
+}
+
+/// Run `trigger_daemon_reload` and log the outcome. Failures are
+/// non-fatal — the post-install banner emits the manual systemctl
+/// daemon-reload command that the operator can run on their own.
+async fn log_daemon_reload_outcome(scope: InstallScope) {
     match trigger_daemon_reload(scope).await {
         Ok(ReloadOutcome::Reloaded) => {
             println!("systemd daemon-reload completed via session bus.");
         }
         Ok(ReloadOutcome::SkippedSystemRequiresRoot) => {
-            // Expected when running --system without root. Hint emitted
-            // below in the post-install banner.
+            // Expected when running --system without root. The
+            // post-install banner emits the matching systemctl
+            // daemon-reload command for the operator.
         }
         Err(e) => {
             eprintln!(
@@ -323,11 +381,6 @@ pub async fn run(
             );
         }
     }
-
-    // Step 5: post-install next steps.
-    print_post_install(scope);
-
-    ExitCode::from(exit::OK)
 }
 
 /// One file the install wizard will write. `mode` is the POSIX mode the
