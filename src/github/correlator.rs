@@ -691,4 +691,139 @@ mod tests {
         let e: CorrelationError = g.into();
         assert!(matches!(e, CorrelationError::Github(_)));
     }
+
+    #[test]
+    fn compute_effective_deadline_uses_normal_when_not_cancelled() {
+        // Without cancel, the effective deadline must equal the
+        // normal deadline. Pin so a regression that swapped the two
+        // arms (or that lost the cancel check) surfaces here.
+        let cancel = CancellationToken::new();
+        let normal = Instant::now() + NORMAL_TIMEOUT;
+        let mut drain_start: Option<Instant> = None;
+        let effective = compute_effective_deadline(&cancel, normal, &mut drain_start);
+        assert_eq!(effective, normal);
+        assert!(
+            drain_start.is_none(),
+            "no cancel observed must leave drain_start as None",
+        );
+    }
+
+    #[test]
+    fn compute_effective_deadline_captures_drain_onset_on_first_cancel_observation() {
+        // First call after cancel.cancel() must populate drain_start.
+        // Subsequent calls must reuse the same anchor — without
+        // capture, a long-running poll cycle would keep sliding the
+        // drain deadline forward.
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let normal = Instant::now() + NORMAL_TIMEOUT;
+        let mut drain_start: Option<Instant> = None;
+
+        let first = compute_effective_deadline(&cancel, normal, &mut drain_start);
+        assert!(
+            drain_start.is_some(),
+            "first cancel observation must capture onset"
+        );
+        let captured = drain_start.expect("captured above");
+
+        // Second call must NOT advance the anchor.
+        let second = compute_effective_deadline(&cancel, normal, &mut drain_start);
+        assert_eq!(drain_start, Some(captured), "anchor must not slide forward");
+        assert_eq!(
+            first, second,
+            "effective deadline must be stable across calls"
+        );
+    }
+
+    #[test]
+    fn compute_effective_deadline_picks_lesser_when_drain_shorter_than_normal() {
+        // When drain_start + DRAIN_TIMEOUT lands BEFORE normal_deadline,
+        // the effective deadline is the drain one (shutdown is bounded
+        // by DRAIN_TIMEOUT, not NORMAL_TIMEOUT). Pin the min() shape.
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let normal = Instant::now() + NORMAL_TIMEOUT;
+        let mut drain_start: Option<Instant> = None;
+        let effective = compute_effective_deadline(&cancel, normal, &mut drain_start);
+        let onset = drain_start.expect("captured above");
+        let drain_deadline = onset + DRAIN_TIMEOUT;
+        assert_eq!(
+            effective, drain_deadline,
+            "DRAIN_TIMEOUT (30s) < NORMAL_TIMEOUT (5min); drain must win",
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_with_cancel_awareness_returns_immediately_when_pre_cancelled() {
+        // Cancelled token must short-circuit the sleep arm — the outer
+        // loop relies on this to re-evaluate the (now drain-bounded)
+        // deadline without waiting through the full backoff.
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut iter = std::iter::repeat(POLL_INTERVAL_MAX);
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(600);
+        sleep_with_cancel_awareness(&mut iter, deadline, &cancel).await;
+        let advanced = Instant::now() - start;
+        assert!(
+            advanced < Duration::from_millis(1),
+            "cancel arm must fire instantly; virtual clock advanced {advanced:?}",
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_with_cancel_awareness_sleeps_for_next_backoff_delay() {
+        // When neither deadline nor cancel intervenes, the function
+        // sleeps for exactly the next backoff slot.
+        let cancel = CancellationToken::new();
+        let mut iter =
+            std::iter::once(Duration::from_secs(5)).chain(std::iter::repeat(POLL_INTERVAL_MAX));
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(600);
+        sleep_with_cancel_awareness(&mut iter, deadline, &cancel).await;
+        let advanced = Instant::now() - start;
+        assert_eq!(
+            advanced,
+            Duration::from_secs(5),
+            "must sleep exactly the iterator's next delay",
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_with_cancel_awareness_caps_sleep_at_remaining_budget() {
+        // Backoff iterator yields 60s but deadline is only 5s away —
+        // the sleep must clip to the deadline so the outer loop wakes
+        // and returns Timeout promptly rather than over-running.
+        let cancel = CancellationToken::new();
+        let mut iter = std::iter::repeat(POLL_INTERVAL_MAX);
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(5);
+        sleep_with_cancel_awareness(&mut iter, deadline, &cancel).await;
+        let advanced = Instant::now() - start;
+        assert_eq!(
+            advanced,
+            Duration::from_secs(5),
+            "sleep must clip to deadline (5s), not the 60s backoff slot",
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_with_cancel_awareness_zero_sleep_when_deadline_already_passed() {
+        // The outer loop checks `now >= deadline` before calling sleep,
+        // but defense-in-depth: an in-the-past deadline must produce a
+        // zero-duration sleep, not an underflow or wedge.
+        let cancel = CancellationToken::new();
+        let mut iter = std::iter::repeat(POLL_INTERVAL_MAX);
+        let now = Instant::now();
+        let past_deadline = now;
+        // Advance virtual time so deadline is strictly in the past.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let before = Instant::now();
+        sleep_with_cancel_awareness(&mut iter, past_deadline, &cancel).await;
+        let advanced = Instant::now() - before;
+        assert!(
+            advanced < Duration::from_millis(1),
+            "past deadline must short-circuit to zero-sleep; advanced {advanced:?}",
+        );
+    }
 }
