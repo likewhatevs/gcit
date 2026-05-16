@@ -78,29 +78,122 @@ pub(super) async fn handle_trigger<E: DispatchExecutor>(
     monitors: &mut JoinSet<()>,
     executor: &E,
 ) -> Result<(), DispatchError> {
-    // ActionConfig is currently only GithubWorkflowDispatch but match
-    // exhaustively so a new variant surfaces here.
-    let (repo, workflow, ref_name, inputs) = match &params.action {
-        ActionConfig::GithubWorkflowDispatch {
-            repo,
-            workflow,
-            ref_name,
-            inputs,
-            ..
-        } => (
-            repo.clone(),
-            workflow.clone(),
-            ref_name.clone(),
-            inputs.clone(),
-        ),
-    };
+    let action_fields = extract_action_fields(&params.action);
 
     let gcit_run_id = Uuid::new_v4();
     // `trigger_dispatched_at` is the wall-clock at input-render — the
     // closest stand-in for dispatch time we have before
     // `dispatch_with_retry` returns its own `DispatchOutcome`.
     let trigger_dispatched_at = Utc::now();
-    let trigger_run_ctx = RunContext {
+    let trigger_run_ctx = build_run_context(
+        &params,
+        &trigger,
+        &action_fields.repo,
+        &action_fields.workflow,
+        gcit_run_id,
+        trigger_dispatched_at,
+        // pre-correlate: run_id / run_url unknown.
+        0,
+        String::new(),
+    );
+
+    let rendered_inputs = render_dispatch_inputs(&action_fields.inputs, &trigger_run_ctx)?;
+
+    let dispatch_params = DispatchParams {
+        repo: action_fields.repo.clone(),
+        workflow: action_fields.workflow.clone(),
+        ref_name: action_fields.ref_name.clone(),
+        gcit_run_id,
+        rendered_inputs,
+    };
+
+    let (outcome, correlation) = execute_dispatch_and_correlate(
+        executor,
+        dispatch_params,
+        &action_fields.ref_name,
+        &trigger,
+        &cancel,
+    )
+    .await?;
+    debug!(
+        gcit_run_id = %outcome.gcit_run_id,
+        "dispatch succeeded; correlating",
+    );
+
+    emit_run_started(&params, correlation.run_id, &state_tx).await?;
+
+    let final_run_ctx = build_run_context(
+        &params,
+        &trigger,
+        &outcome.repo,
+        &outcome.workflow,
+        outcome.gcit_run_id,
+        outcome.dispatched_at,
+        correlation.run_id,
+        correlation.summary.run_url.clone(),
+    );
+
+    fan_out_run_start(&params, final_run_ctx.clone(), &cancel);
+
+    spawn_run_monitor(
+        monitors,
+        &params,
+        &outcome,
+        &correlation,
+        final_run_ctx,
+        state_tx,
+        cancel,
+    );
+    Ok(())
+}
+
+/// Subset of `ActionConfig` fields the trigger pipeline needs in
+/// owned form. Bundled into a struct so each downstream helper takes
+/// a single reference rather than four cloned scalars.
+struct ActionFields {
+    repo: String,
+    workflow: String,
+    ref_name: String,
+    inputs: std::collections::BTreeMap<String, String>,
+}
+
+/// Extract the relevant fields from the per-flow ActionConfig.
+/// `ActionConfig` is currently only `GithubWorkflowDispatch` but match
+/// exhaustively so a new variant surfaces as a compile error here.
+fn extract_action_fields(action: &ActionConfig) -> ActionFields {
+    match action {
+        ActionConfig::GithubWorkflowDispatch {
+            repo,
+            workflow,
+            ref_name,
+            inputs,
+            ..
+        } => ActionFields {
+            repo: repo.clone(),
+            workflow: workflow.clone(),
+            ref_name: ref_name.clone(),
+            inputs: inputs.clone(),
+        },
+    }
+}
+
+/// Build a `RunContext` from the flow params + trigger + action
+/// fields. Used twice in `handle_trigger`: once pre-correlate (with
+/// placeholder run_id / run_url) for input rendering, and once
+/// post-correlate (with real run_id / run_url) for notifier fan-out
+/// and the monitor task.
+#[allow(clippy::too_many_arguments)]
+fn build_run_context(
+    params: &FlowDispatchParams,
+    trigger: &TriggerSignal,
+    repo: &str,
+    workflow: &str,
+    gcit_run_id: Uuid,
+    dispatched_at: chrono::DateTime<Utc>,
+    run_id: u64,
+    run_url: String,
+) -> RunContext {
+    RunContext {
         flow_name: params.flow_name.clone(),
         flow_description: params.flow_description.clone(),
         source: SourceInfo {
@@ -109,109 +202,107 @@ pub(super) async fn handle_trigger<E: DispatchExecutor>(
             sha: trigger.observed_sha,
             sha_short: short_sha(&trigger.observed_sha),
         },
-        // ActionInfo's run_id + run_url are populated after
-        // correlation; for input rendering we only need source +
-        // flow + gcit.run_id.
         action: ActionInfo {
-            repo: repo.clone(),
-            workflow: workflow.clone(),
-            run_id: 0,
-            run_url: String::new(),
-            dispatched_at: trigger_dispatched_at,
+            repo: repo.to_string(),
+            workflow: workflow.to_string(),
+            run_id,
+            run_url,
+            dispatched_at,
         },
         gcit_run_id,
-    };
-    let trigger_data = notify::render_context(&trigger_run_ctx, &empty_summary());
+    }
+}
 
+/// Render the operator's `action.inputs` handlebars templates against
+/// the trigger context. The handlebars instance is strict-mode (every
+/// variable must resolve) and inputs are the only render shape that
+/// runs per-trigger rather than per-cycle.
+fn render_dispatch_inputs(
+    inputs: &std::collections::BTreeMap<String, String>,
+    trigger_run_ctx: &RunContext,
+) -> Result<std::collections::BTreeMap<String, String>, DispatchError> {
+    let trigger_data = notify::render_context(trigger_run_ctx, &empty_summary());
     let hb = notify::strict_handlebars();
-    let rendered_inputs = match gh_dispatcher::render_inputs(&inputs, &trigger_data, &hb) {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(DispatchError::from_message(
-                "input_render",
-                format!("input render failed: {e}"),
-            ));
-        }
-    };
+    match gh_dispatcher::render_inputs(inputs, &trigger_data, &hb) {
+        Ok(r) => Ok(r),
+        Err(e) => Err(DispatchError::from_message(
+            "input_render",
+            format!("input render failed: {e}"),
+        )),
+    }
+}
 
-    let dispatch_params = DispatchParams {
-        repo: repo.clone(),
-        workflow: workflow.clone(),
-        ref_name: ref_name.clone(),
-        gcit_run_id,
-        rendered_inputs,
-    };
-
-    let branch = correlator::ref_to_branch(&ref_name).to_string();
+/// Run the (dispatch + correlate) pair through the test-seam
+/// executor. Maps the per-stage `ExecuteOutcome` variants onto the
+/// matching DispatchError prefixes so each failure routes to the
+/// right operator-visible category (`dispatch`, `correlate`).
+async fn execute_dispatch_and_correlate<E: DispatchExecutor>(
+    executor: &E,
+    dispatch_params: DispatchParams,
+    ref_name: &str,
+    trigger: &TriggerSignal,
+    cancel: &CancellationToken,
+) -> Result<
+    (
+        crate::github::dispatcher::DispatchOutcome,
+        crate::github::correlator::CorrelationOutcome,
+    ),
+    DispatchError,
+> {
+    let branch = correlator::ref_to_branch(ref_name).to_string();
     let head_sha = trigger.observed_sha.to_string();
-    let (outcome, correlation) = match executor
+    match executor
         .execute(dispatch_params, branch, head_sha, cancel.clone())
         .await
     {
         ExecuteOutcome::Success {
             dispatch,
             correlation,
-        } => (dispatch, correlation),
-        ExecuteOutcome::DispatchFailed(e) => {
-            return Err(DispatchError::from_github_error("dispatch", &e));
-        }
+        } => Ok((dispatch, correlation)),
+        ExecuteOutcome::DispatchFailed(e) => Err(DispatchError::from_github_error("dispatch", &e)),
         ExecuteOutcome::CorrelateFailed(e) => {
-            return Err(DispatchError::from_correlation_error("correlate", &e));
+            Err(DispatchError::from_correlation_error("correlate", &e))
         }
-    };
-    debug!(
-        gcit_run_id = %outcome.gcit_run_id,
-        "dispatch succeeded; correlating",
-    );
+    }
+}
 
-    if state_tx
+async fn emit_run_started(
+    params: &FlowDispatchParams,
+    run_id: u64,
+    state_tx: &Sender<StateUpdate>,
+) -> Result<(), DispatchError> {
+    state_tx
         .send(StateUpdate::RunStarted {
             flow: params.flow_name.clone(),
-            run_id: correlation.run_id,
+            run_id,
             started_at: Utc::now(),
         })
         .await
-        .is_err()
-    {
-        return Err(DispatchError::from_message(
-            "state_writer",
-            "state writer dropped".into(),
-        ));
-    }
+        .map_err(|_| DispatchError::from_message("state_writer", "state writer dropped".into()))
+}
 
-    let final_run_ctx = RunContext {
-        flow_name: params.flow_name.clone(),
-        flow_description: params.flow_description.clone(),
-        source: SourceInfo {
-            url: params.url.clone(),
-            ref_name: params.ref_name.clone(),
-            sha: trigger.observed_sha,
-            sha_short: short_sha(&trigger.observed_sha),
-        },
-        action: ActionInfo {
-            repo: outcome.repo.clone(),
-            workflow: outcome.workflow.clone(),
-            run_id: correlation.run_id,
-            run_url: correlation.summary.run_url.clone(),
-            dispatched_at: outcome.dispatched_at,
-        },
-        gcit_run_id: outcome.gcit_run_id,
-    };
+/// Fan out `on_run_start` fire-and-forget so a slow notifier does not
+/// delay monitor spawn. Each per-notifier task logs its own outcome;
+/// failures are isolated. Cancel propagates so SIGTERM mid-fan-out
+/// unblocks any blocking notifier syscall.
+fn fan_out_run_start(params: &FlowDispatchParams, ctx: RunContext, cancel: &CancellationToken) {
+    let cancel_for_fanout = cancel.clone();
+    let _ = crate::flow::spawn_fan_out(&params.notifiers, "run-start", None, move |n| {
+        let c = ctx.clone();
+        let cancel = cancel_for_fanout.clone();
+        async move { n.on_run_start(&c, &cancel).await }
+    });
+}
 
-    // Fan out `on_run_start` fire-and-forget so a slow notifier does
-    // not delay monitor spawn. Each per-notifier task logs its own
-    // outcome; failures are isolated. Cancel propagates so an SIGTERM
-    // mid-fan-out unblocks any blocking notifier syscall.
-    {
-        let ctx = final_run_ctx.clone();
-        let cancel_for_fanout = cancel.clone();
-        let _ = crate::flow::spawn_fan_out(&params.notifiers, "run-start", None, move |n| {
-            let c = ctx.clone();
-            let cancel = cancel_for_fanout.clone();
-            async move { n.on_run_start(&c, &cancel).await }
-        });
-    }
-
+fn spawn_run_monitor(
+    monitors: &mut JoinSet<()>,
+    params: &FlowDispatchParams,
+    outcome: &crate::github::dispatcher::DispatchOutcome,
+    correlation: &crate::github::correlator::CorrelationOutcome,
+    run_context: RunContext,
+    state_tx: Sender<StateUpdate>,
+    cancel: CancellationToken,
+) {
     let mparams = MonitorParams {
         flow_name: params.flow_name.clone(),
         repo: outcome.repo.clone(),
@@ -221,10 +312,9 @@ pub(super) async fn handle_trigger<E: DispatchExecutor>(
         github_client: Arc::clone(&params.github_client),
         rate_limit: Arc::clone(&params.rate_limit),
         notifiers: params.notifiers.clone(),
-        run_context: final_run_ctx,
+        run_context,
     };
-    spawn_monitor(monitors, mparams, state_tx.clone(), cancel.clone());
-    Ok(())
+    spawn_monitor(monitors, mparams, state_tx, cancel);
 }
 
 /// First 12 hex chars of an `ObjectId` for `{{source.sha_short}}`.
