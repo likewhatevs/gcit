@@ -25,9 +25,10 @@
 // happens transparently. Operators care about "did the commit change",
 // not "did the symbolic pointer change".
 
-use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::Duration;
+
+mod common;
+use common::bare_repo::{commit_with_message, file_url_for, init_bare_repo, update_ref};
 
 use tempfile::TempDir;
 
@@ -187,126 +188,9 @@ async fn ls_remote_circular_symref_handled_safely() {
     }
 }
 
-/// Helpers for the symref-cycle test. Mirror the shape used by
-/// tests/poll_ls_remote.rs's bare-repo helpers; deliberately
-/// duplicated rather than extracted to a shared module to keep
-/// integration tests independent (Rust has no good story for
-/// cross-test-binary helper sharing without restructuring).
-fn init_bare_repo() -> TempDir {
-    let dir = TempDir::new().expect("create tempdir");
-    let output = Command::new("git")
-        .arg("init")
-        .arg("--bare")
-        .arg(dir.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("spawn git init --bare");
-    assert!(
-        output.status.success(),
-        "git init --bare {} failed: status={:?} stderr={}",
-        dir.path().display(),
-        output.status,
-        String::from_utf8_lossy(&output.stderr),
-    );
-    dir
-}
-
-fn run_git_in_with_stdin(dir: &Path, args: &[&str], stdin: &str) -> String {
-    use std::io::Write;
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn git");
-    child
-        .stdin
-        .as_mut()
-        .expect("child stdin")
-        .write_all(stdin.as_bytes())
-        .expect("write stdin to git");
-    let output = child.wait_with_output().expect("git wait");
-    assert!(
-        output.status.success(),
-        "git {} in {} failed: status={:?} stderr={}",
-        args.join(" "),
-        dir.display(),
-        output.status,
-        String::from_utf8_lossy(&output.stderr),
-    );
-    String::from_utf8(output.stdout)
-        .expect("git stdout is utf-8")
-        .trim()
-        .to_string()
-}
-
-fn run_git_in(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("spawn git");
-    assert!(
-        output.status.success(),
-        "git {} in {} failed: status={:?} stderr={}",
-        args.join(" "),
-        dir.display(),
-        output.status,
-        String::from_utf8_lossy(&output.stderr),
-    );
-    String::from_utf8(output.stdout)
-        .expect("git stdout is utf-8")
-        .trim()
-        .to_string()
-}
-
-fn commit_with_message(bare: &Path, blob_content: &str, message: &str) -> String {
-    let blob_sha = run_git_in_with_stdin(bare, &["hash-object", "-w", "--stdin"], blob_content);
-    let tree_input = format!("100644 blob {blob_sha}\tfile\n");
-    let tree_sha = run_git_in_with_stdin(bare, &["mktree"], &tree_input);
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(bare)
-        .args(["commit-tree", &tree_sha, "-m", message])
-        .env("GIT_AUTHOR_NAME", "gcit-test")
-        .env("GIT_AUTHOR_EMAIL", "gcit-test@example.invalid")
-        .env("GIT_AUTHOR_DATE", "1700000000 +0000")
-        .env("GIT_COMMITTER_NAME", "gcit-test")
-        .env("GIT_COMMITTER_EMAIL", "gcit-test@example.invalid")
-        .env("GIT_COMMITTER_DATE", "1700000000 +0000")
-        .stdin(Stdio::null())
-        .output()
-        .expect("spawn git commit-tree");
-    assert!(
-        output.status.success(),
-        "git commit-tree in {} failed: status={:?} stderr={}",
-        bare.display(),
-        output.status,
-        String::from_utf8_lossy(&output.stderr),
-    );
-    String::from_utf8(output.stdout)
-        .expect("commit-tree stdout is utf-8")
-        .trim()
-        .to_string()
-}
-
-fn update_ref(bare: &Path, ref_name: &str, commit_sha: &str) {
-    run_git_in(bare, &["update-ref", ref_name, commit_sha]);
-}
-
-fn file_url_for(bare: &Path) -> String {
-    let path = bare.to_str().expect("tempdir path is utf-8");
-    format!("file://{path}")
-}
+// bare-repo fixture helpers moved to tests/common/bare_repo.rs; both
+// tests/poll_ls_remote.rs and this file now share the same canonical
+// copy.
 
 #[tokio::test]
 #[ignore = "covered by tests/poll_ls_remote.rs::poll_resolves_annotated_tag_returns_tag_sha_not_peel — \
