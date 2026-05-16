@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `gcit status` now reports the root-cause panic on a flow whose
+  sibling role also panicked during the same cancel cascade. When a
+  flow's poll task panics, the supervisor cancels the dispatcher
+  task; the dispatcher's downstream panic (from the cancelled
+  state-tx send or similar) previously overwrote the original
+  panic's `last_error` body, leaving the operator chasing the
+  cascade instead of the root cause. The downstream panic still
+  surfaces in journald via the unconditional `flow task PANICKED`
+  WARN record, but the in-memory `last_error` map preserves the
+  first panic's body.
+- `http.max_concurrent` is still accepted for back-compat but the
+  deprecation WARN now fires at most once per process. Operators
+  using SIGHUP-driven config reload no longer see the same advisory
+  re-spammed every cycle.
 - GitHub `X-RateLimit-Reset` headers in the past are now treated as
   missing on both 403/Remaining=0 and 429 responses; the classifier
   defaults to a 60s hold-off so the dispatcher backs off to a real
