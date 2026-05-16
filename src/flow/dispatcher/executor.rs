@@ -23,6 +23,12 @@ use crate::github::rate_limit::RateLimitState;
 /// a scripted impl. Uses native async-fn-in-trait so callers take
 /// `&E: DispatchExecutor` and avoid the `Pin<Box<dyn Future>>`
 /// allocation per trigger.
+///
+/// Not sealed (no `Sealed` supertrait): `tests/flow_dispatcher_executor.rs`
+/// and `tests/supervisor_loop_factories.rs` are separate cargo crates
+/// that ship `ScriptedDispatchExecutor` impls. See
+/// `PollExecutor`'s same-shaped rationale.
+#[doc(hidden)]
 pub trait DispatchExecutor: Send + Sync {
     fn execute(
         &self,

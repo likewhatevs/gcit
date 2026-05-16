@@ -155,17 +155,10 @@ pub struct PollParams {
     /// Shared last-error map. The poll loop clears its entry on the
     /// first successful `PollOutcome::Refreshed` so a stale panic
     /// error from before respawn does not leave the flow labeled
-    /// "errored" once it is healthy again.
-    ///
-    /// Visibility note: `pub` (matching its sibling fields) so the
-    /// supervisor end-to-end test harness in tests/poll_unborn_ref.rs
-    /// can pass an external `Arc<Mutex<BTreeMap<...>>>` and read it
-    /// back to assert the recorded entries. The element type
-    /// `super::supervisor::FlowLastError` is `pub` with private
-    /// fields and `pub fn at/kind/message/retry_at` accessors —
-    /// tests get read-only views without exposing the internal
-    /// record shape. The supervisor is still the only production
-    /// construction site.
+    /// "errored" once it is healthy again. The supervisor is the
+    /// only production construction site; integration tests reach
+    /// past the marker to inject and inspect the map.
+    #[doc(hidden)]
     pub last_errors: Arc<Mutex<BTreeMap<String, super::supervisor::FlowLastError>>>,
 }
 

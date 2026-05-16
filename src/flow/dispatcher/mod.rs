@@ -80,6 +80,10 @@ pub struct FlowDispatchParams {
     /// Effective `job_interval` for the per-run monitor.
     pub job_interval: Duration,
     /// Pre-built notifier handles for the destinations on this flow.
+    /// The supervisor is the only production construction site;
+    /// integration tests reach past the marker to inject a
+    /// `RecordingNotifier` and assert fan-out shape.
+    #[doc(hidden)]
     pub notifiers: Vec<Arc<dyn DynNotifier>>,
 }
 

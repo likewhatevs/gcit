@@ -902,4 +902,74 @@ mod tests {
         );
         assert!(!watched.flow[0].enabled);
     }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    #[tracing_test::traced_test]
+    async fn run_reload_drain_timeout_warns_when_tasks_ignore_cancel() {
+        // The 30s drain timeout exists so a cancelled poll/dispatcher
+        // task that refuses to observe its CancellationToken (wedged
+        // syscall, deadlocked mutex, etc.) does not stall the entire
+        // reload. After 30s the drain returns Err and emits a
+        // `reload drain timed out` warn — the leftover tasks stay in
+        // the JoinSet for the main `select!` loop to reap lazily.
+        //
+        // Pin the warn path: seed the JoinSet with two wedged tasks
+        // that take a year of virtual time to exit and never observe
+        // cancellation. Under `start_paused = true` the 30s timeout
+        // fires before the wedged sleeps would have ended, so the
+        // drain returns Err and the warn surfaces in the captured
+        // trace buffer.
+        use super::super::super::types::FlowRole;
+
+        let initial = cfg_with_defaults(vec![flow(
+            "stubborn",
+            "https://example.com/stubborn.git",
+            true,
+            Vec::new(),
+        )]);
+        let (mut fixture, _cancel_tokens) =
+            build_reload_fixture(&initial, &["stubborn".to_string()]);
+
+        // Each flow contributes 2 tasks (poll + dispatcher) to the
+        // kept_task_count math. Both ignore cancellation and just
+        // sleep for a virtual year.
+        for role in [FlowRole::Poll, FlowRole::Dispatcher] {
+            fixture.join_set.spawn(async move {
+                tokio::time::sleep(Duration::from_secs(60 * 60 * 24 * 365)).await;
+                FlowExit {
+                    flow: "stubborn".to_string(),
+                    role,
+                    panic: None,
+                }
+            });
+        }
+
+        // New config disables `stubborn` — reload classifier produces
+        // Disable, the cancel-and-drain path runs and waits on the
+        // two wedged tasks. A fully-empty new config is rejected by
+        // validation ("at least one flow is required"), so we toggle
+        // `enabled` instead.
+        let new_cfg = cfg_with_defaults(vec![flow(
+            "stubborn",
+            "https://example.com/stubborn.git",
+            false,
+            Vec::new(),
+        )]);
+        write_config_at(&fixture.config_path, &config_to_toml(&new_cfg));
+
+        run_reload(
+            &fixture.config_path,
+            Arc::clone(&fixture.config_watch),
+            &fixture.ctx,
+            &mut fixture.join_set,
+            &mut fixture.registry,
+            &fixture.control_handler,
+        )
+        .await;
+
+        assert!(
+            logs_contain("reload drain timed out after 30s"),
+            "drain-timeout warn must fire when JoinSet tasks ignore cancel",
+        );
+    }
 }

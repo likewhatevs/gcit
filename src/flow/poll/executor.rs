@@ -45,6 +45,15 @@ impl std::fmt::Display for PollCycleError {
 /// loop with a scripted outcome stream. The loop consumes
 /// `E: PollExecutor` as a generic type parameter, so dyn-trait
 /// erasure isn't needed.
+///
+/// Not sealed (no `Sealed` supertrait): `tests/poll_unborn_ref.rs`
+/// and `tests/supervisor_loop_factories.rs` are separate cargo crates
+/// that ship `ScriptedPollExecutor` impls for harnessing the loop.
+/// Sealing would force the harness through a `pub` test-support
+/// feature flag or relocating those tests into `#[cfg(test)] mod`
+/// blocks; neither buys safety for a binary-only crate that doesn't
+/// publish its lib surface (see `lib.rs`).
+#[doc(hidden)]
 pub trait PollExecutor: Send + Sync {
     /// Strategy label for the startup info! log. Production:
     /// `"github_api"` | `"grokmirror"` | `"ls_remote"`. Tests pick a
