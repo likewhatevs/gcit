@@ -238,22 +238,15 @@ fn sync_all_completes_before_flock_release() {
     assert_eq!(bytes, b"committed\n");
 }
 
-#[test]
-#[ignore = "needs OS fault injection (kill+remount) — durability across power loss isn't \
-            observable to a same-process test. Source-order is pinned by \
-            sync_all_completes_before_flock_release above; this stub guards the durability \
-            invariant for a future fault-injection harness."]
-fn sync_all_durability_across_power_loss() {
-    // Real verification approach (when activated under a fault-
-    // injection harness):
-    //   1. Spawn a child process that calls write_with_lock.
-    //   2. Inject a kill between the sync_all return and the
-    //      guard drop (or simulate power loss via a remountable
-    //      block device).
-    //   3. Remount the filesystem and read the spool — the bytes
-    //      MUST be present, proving the sync_all flushed to
-    //      stable storage before the lock was released.
-}
+// Durability-across-power-loss is not observable to a same-process
+// test — it requires kill+remount fault injection (an OS-level test
+// harness rather than a cargo nextest binary). The testable part of
+// the invariant (sync_all completes before the flock release) is
+// pinned by `sync_all_completes_before_flock_release` above. The
+// production code documents the durability contract in the
+// `write_with_lock` comments; gcit ships a unit test for the
+// orderable part and trusts the kernel's fsync contract for the
+// rest.
 
 #[tokio::test]
 async fn sync_all_failure_propagates_through_on_run_complete_pipeline() {
