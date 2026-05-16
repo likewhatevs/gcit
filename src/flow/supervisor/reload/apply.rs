@@ -46,6 +46,37 @@ pub(crate) async fn run_reload(
     registry: &mut FlowRegistry,
     control_handler: &Arc<ControlHandler>,
 ) {
+    emit_reloading_notify();
+
+    let new_cfg = match load_new_config_or_record_error(config_path, ctx).await {
+        Some(cfg) => cfg,
+        None => return,
+    };
+    let old_cfg = config_watch.borrow().clone();
+    info!(
+        target: "gcit::supervisor",
+        flows = new_cfg.flow.len(),
+        "config reloaded; diffing per-flow",
+    );
+
+    let actions = compute_actions(&old_cfg, &new_cfg, registry);
+    let plan = apply_actions_to_registry(&actions, registry);
+
+    invalidate_stale_credentials(ctx, &new_cfg, &plan.to_keep).await;
+    drain_until_kept(join_set, plan.to_keep.len() * 2, &plan.to_keep).await;
+    emit_flow_removed(ctx, &plan.removed_flows, &plan.url_resets).await;
+
+    // Push the new config BEFORE respawning so the panic-respawn
+    // path (which reads from the watch) sees the new shape if any
+    // freshly-spawned flow panics during its first iteration.
+    config_watch.send_replace(Arc::clone(&new_cfg));
+
+    spawn_new_generation(&new_cfg, ctx, join_set, registry, &plan.to_keep).await;
+
+    finalize_reload(ctx, control_handler, registry).await;
+}
+
+fn emit_reloading_notify() {
     let mut reloading_states: Vec<NotifyState> = vec![NotifyState::Reloading];
     match NotifyState::monotonic_usec_now() {
         Ok(m) => reloading_states.push(m),
@@ -53,8 +84,7 @@ pub(crate) async fn run_reload(
             // CLOCK_MONOTONIC unavailable. sd-notify still accepts
             // Reloading=1 without MONOTONIC_USEC; systemd's reload
             // deadline tracking is degraded but the daemon still
-            // signals reload-in-progress. Log so operators can
-            // notice if this fires (it should not in practice).
+            // signals reload-in-progress.
             tracing::debug!(
                 target: "gcit::supervisor",
                 error = %e,
@@ -63,14 +93,18 @@ pub(crate) async fn run_reload(
         }
     }
     let _ = sd_notify::notify(&reloading_states);
+}
 
-    let new_cfg = match crate::config::load(config_path) {
-        Ok(c) => Arc::new(c),
+/// Re-parses the config file. On Err records a `(reload)` synthetic
+/// last_error, re-emits Ready (so systemd doesn't stay in Reloading),
+/// and returns None — the caller short-circuits the rest of the reload.
+async fn load_new_config_or_record_error(
+    config_path: &std::path::Path,
+    ctx: &SpawnContext,
+) -> Option<Arc<Config>> {
+    match crate::config::load(config_path) {
+        Ok(c) => Some(Arc::new(c)),
         Err(errs) => {
-            // Re-emit Ready on failure so systemd does not stay in
-            // Reloading. Record the parse errors under
-            // RELOAD_SYNTHETIC_KEY so `gcit status` surfaces the
-            // typo to the operator.
             let formatted: Vec<String> = errs.iter().map(|e| format!("{}", e)).collect();
             warn!(
                 target: "gcit::supervisor",
@@ -92,16 +126,16 @@ pub(crate) async fn run_reload(
                     "sd_notify Ready (post-failed-reload) failed",
                 );
             }
-            return;
+            None
         }
-    };
-    let old_cfg = config_watch.borrow().clone();
-    info!(
-        target: "gcit::supervisor",
-        flows = new_cfg.flow.len(),
-        "config reloaded; diffing per-flow",
-    );
+    }
+}
 
+fn compute_actions(
+    old_cfg: &Config,
+    new_cfg: &Config,
+    registry: &FlowRegistry,
+) -> Vec<ReloadAction> {
     let old_by_name: BTreeMap<String, FlowConfig> = old_cfg
         .flow
         .iter()
@@ -113,16 +147,36 @@ pub(crate) async fn run_reload(
         .map(|f| (f.name.clone(), f.clone()))
         .collect();
     let live_handles: BTreeSet<String> = registry.handles.keys().cloned().collect();
-    let actions = compute_reload_actions(&old_by_name, &new_by_name, &live_handles);
+    compute_reload_actions(&old_by_name, &new_by_name, &live_handles)
+}
 
-    let mut to_keep: BTreeSet<String> = BTreeSet::new();
-    let mut url_resets: Vec<String> = Vec::new();
-    let mut removed_flows: Vec<String> = Vec::new();
+/// Aggregated side-effect plan produced by walking the per-flow
+/// actions. `to_keep` is the set of unchanged flow names (their
+/// handles stay live); `url_resets` and `removed_flows` are the
+/// names whose persisted state should be dropped via FlowRemoved;
+/// they are mutually exclusive (one flow lands in exactly one list).
+struct ReloadPlan {
+    to_keep: BTreeSet<String>,
+    url_resets: Vec<String>,
+    removed_flows: Vec<String>,
+}
+
+/// Walks the per-flow actions: mutates `registry.handles` in place
+/// (cancelling old generations, preserving kept ones, dropping the
+/// pending-respawn slot for cancelled flows), cancels any orphan
+/// handles not named by an action, and returns the side-effect plan
+/// the rest of run_reload needs.
+fn apply_actions_to_registry(actions: &[ReloadAction], registry: &mut FlowRegistry) -> ReloadPlan {
+    let mut plan = ReloadPlan {
+        to_keep: BTreeSet::new(),
+        url_resets: Vec::new(),
+        removed_flows: Vec::new(),
+    };
     let mut drained = std::mem::take(&mut registry.handles);
-    for action in &actions {
+    for action in actions {
         match action {
             ReloadAction::Keep { name } => {
-                to_keep.insert(name.clone());
+                plan.to_keep.insert(name.clone());
                 if let Some(handle) = drained.remove(name) {
                     registry.handles.insert(name.clone(), handle);
                 }
@@ -134,7 +188,7 @@ pub(crate) async fn run_reload(
                 if let Some(handle) = drained.remove(name) {
                     handle.cancel.cancel();
                 }
-                removed_flows.push(name.clone());
+                plan.removed_flows.push(name.clone());
                 registry.respawning_flows.remove(name);
             }
             ReloadAction::Remove {
@@ -144,7 +198,7 @@ pub(crate) async fn run_reload(
                 // No live handle to cancel (panic-mid-respawn or
                 // already-exited); still emit FlowRemoved so state
                 // drops.
-                removed_flows.push(name.clone());
+                plan.removed_flows.push(name.clone());
                 registry.respawning_flows.remove(name);
             }
             ReloadAction::Disable { name, url_changed } => {
@@ -152,7 +206,7 @@ pub(crate) async fn run_reload(
                     handle.cancel.cancel();
                 }
                 if *url_changed {
-                    url_resets.push(name.clone());
+                    plan.url_resets.push(name.clone());
                 }
                 // Release pending respawn slot so a future re-enable
                 // is not deduped against the disabled-period slot.
@@ -163,7 +217,7 @@ pub(crate) async fn run_reload(
                     handle.cancel.cancel();
                 }
                 if *url_changed {
-                    url_resets.push(name.clone());
+                    plan.url_resets.push(name.clone());
                 }
                 registry.respawning_flows.remove(name);
             }
@@ -178,81 +232,87 @@ pub(crate) async fn run_reload(
     for (_name, handle) in drained {
         handle.cancel.cancel();
     }
+    plan
+}
 
-    let keep_credentials = collect_kept_credentials(&new_cfg, &to_keep);
+async fn invalidate_stale_credentials(
+    ctx: &SpawnContext,
+    new_cfg: &Config,
+    to_keep: &BTreeSet<String>,
+) {
+    let keep_credentials = collect_kept_credentials(new_cfg, to_keep);
     ctx.credential_pool
         .write()
         .await
         .invalidate_except(&keep_credentials);
+}
 
-    // Drain the JoinSet of exits the cancellations just produced.
-    // Per the cancel-and-respawn contract: every cancelled flow must
-    // return an exit before we spawn the new set, otherwise two
-    // generations of the same flow briefly race on the state writer
-    // mpsc.
-    //
-    // The drain waits for the count of exits the cancellations
-    // should produce. Kept-alive flows still live in the JoinSet but
-    // produce no exit while running, so a count-based bound stops
-    // once cancelled tasks have unwound. Each flow contributes 2
-    // tasks (poll + dispatcher).
-    //
-    // 30s timeout caps the wait when a cancelled task ignores its
-    // CancellationToken. Leftover wedged tasks stay in the JoinSet
-    // and are reaped lazily via the supervisor's main select! arm.
-    //
-    // Worst-case wedged-old-gen state-writer race: a cancelled poll
-    // task can have an in-flight `state_tx.send(PollObservation)`
-    // that completes AFTER the new generation has spawned. tokio
-    // mpsc FIFO + per-variant LWW in `apply.rs` bound the impact:
-    //   - PollObservation / PollTimestamp: LWW corrects on next
-    //     observation. One stale-but-valid SHA appears briefly.
-    //   - RunStarted: appends with run_id dedup. A wedged old-gen
-    //     dispatcher landing a RunStarted after cancel produces a
-    //     phantom active_runs entry whose monitor was already
-    //     cancelled (so its RunFinished never arrives). Cleared on
-    //     flow removal or daemon restart. Real but bounded leak.
-    //   - RunFinished: removes by run_id; disjoint across generations.
-    //   - FlowRemoved: drops the entry. Emitted AFTER the drain (see
-    //     below) so old-gen observations in the FIFO land first.
-    let kept_task_count = to_keep.len() * 2;
-    let drain_completed = {
-        let drain = async {
-            while join_set.len() > kept_task_count {
-                match join_set.join_next().await {
-                    Some(Ok(exit)) => {
-                        // Kept-alive flows that panic during the drain
-                        // surface here too (the JoinSet doesn't
-                        // partition by name); log so the panic stays
-                        // operator-visible instead of disappearing.
-                        if let Some(message) = &exit.panic {
-                            let kept = to_keep.contains(&exit.flow);
-                            warn!(
-                                target: "gcit::supervisor",
-                                flow = %exit.flow,
-                                role = ?exit.role,
-                                kept,
-                                panic = %message,
-                                "flow task panicked during reload drain",
-                            );
-                        }
-                    }
-                    Some(Err(e)) if e.is_cancelled() => {}
-                    Some(Err(e)) => {
+/// Drains the JoinSet down to `kept_task_count` exits remaining, then
+/// returns. Per the cancel-and-respawn contract: every cancelled flow
+/// must return an exit before the new generation spawns, otherwise
+/// two generations briefly race on the state writer mpsc. Kept-alive
+/// flows produce no exit while running, so the count-based bound
+/// stops once cancelled tasks have unwound. Each flow contributes 2
+/// tasks (poll + dispatcher).
+///
+/// 30s timeout caps the wait when a cancelled task ignores its
+/// CancellationToken. Leftover wedged tasks stay in the JoinSet and
+/// are reaped lazily via the supervisor's main select! arm.
+///
+/// Worst-case wedged-old-gen state-writer race: a cancelled poll
+/// task can have an in-flight `state_tx.send(PollObservation)` that
+/// completes AFTER the new generation has spawned. tokio mpsc FIFO +
+/// per-variant LWW in `apply.rs` bound the impact:
+///   - PollObservation / PollTimestamp: LWW corrects on next
+///     observation. One stale-but-valid SHA appears briefly.
+///   - RunStarted: appends with run_id dedup. A wedged old-gen
+///     dispatcher landing a RunStarted after cancel produces a
+///     phantom active_runs entry whose monitor was already cancelled
+///     (so its RunFinished never arrives). Cleared on flow removal
+///     or daemon restart. Real but bounded leak.
+///   - RunFinished: removes by run_id; disjoint across generations.
+///   - FlowRemoved: drops the entry. Emitted AFTER the drain so
+///     old-gen observations in the FIFO land first.
+async fn drain_until_kept(
+    join_set: &mut JoinSet<FlowExit>,
+    kept_task_count: usize,
+    to_keep: &BTreeSet<String>,
+) {
+    let drain = async {
+        while join_set.len() > kept_task_count {
+            match join_set.join_next().await {
+                Some(Ok(exit)) => {
+                    // Kept-alive flows that panic during the drain
+                    // surface here too (the JoinSet doesn't partition
+                    // by name); log so the panic stays
+                    // operator-visible instead of disappearing.
+                    if let Some(message) = &exit.panic {
+                        let kept = to_keep.contains(&exit.flow);
                         warn!(
                             target: "gcit::supervisor",
-                            error = %e,
-                            "flow task join error during reload drain",
+                            flow = %exit.flow,
+                            role = ?exit.role,
+                            kept,
+                            panic = %message,
+                            "flow task panicked during reload drain",
                         );
                     }
-                    None => break,
                 }
+                Some(Err(e)) if e.is_cancelled() => {}
+                Some(Err(e)) => {
+                    warn!(
+                        target: "gcit::supervisor",
+                        error = %e,
+                        "flow task join error during reload drain",
+                    );
+                }
+                None => break,
             }
-        };
-        tokio::time::timeout(Duration::from_secs(30), drain)
-            .await
-            .is_ok()
+        }
     };
+    let drain_completed = tokio::time::timeout(Duration::from_secs(30), drain)
+        .await
+        .is_ok();
     if !drain_completed {
         warn!(
             target: "gcit::supervisor",
@@ -260,19 +320,20 @@ pub(crate) async fn run_reload(
             "reload drain timed out after 30s; proceeding with respawn (leftover tasks will be observed via the main select! loop when they complete)",
         );
     }
+}
 
-    // Emit FlowRemoved AFTER the drain. Sequencing: a cancelled poll
-    // task can have one or more in-flight `state_tx.send(...)` calls
-    // that finished after the cancel token fired but before the
-    // task observed cancellation. tokio mpsc is FIFO so any
-    // FlowRemoved here lands after those pending observations.
-    //
-    // `removed_flows` and `url_resets` are exclusive per the
-    // classifier (a flow lands in exactly one), so chaining is
-    // safe and reads as one logical emit pass. A send error means
-    // the state writer is gone — log because the FlowRemoved is
-    // lost and persisted state for this flow will be stale until
-    // the next daemon restart.
+/// Emit FlowRemoved AFTER the drain. Sequencing: a cancelled poll
+/// task can have one or more in-flight `state_tx.send(...)` calls
+/// that finished after the cancel token fired but before the task
+/// observed cancellation. tokio mpsc is FIFO so any FlowRemoved here
+/// lands after those pending observations.
+///
+/// `removed_flows` and `url_resets` are exclusive per the classifier
+/// (a flow lands in exactly one), so chaining is safe and reads as
+/// one logical emit pass. A send error means the state writer is
+/// gone — log because the FlowRemoved is lost and persisted state
+/// for this flow will be stale until the next daemon restart.
+async fn emit_flow_removed(ctx: &SpawnContext, removed_flows: &[String], url_resets: &[String]) {
     for name in removed_flows.iter().chain(url_resets.iter()) {
         if let Err(e) = ctx
             .state_tx
@@ -287,12 +348,15 @@ pub(crate) async fn run_reload(
             );
         }
     }
+}
 
-    // Push the new config BEFORE respawning so the panic-respawn
-    // path (which reads from the watch) sees the new shape if any
-    // freshly-spawned flow panics during its first iteration.
-    config_watch.send_replace(Arc::clone(&new_cfg));
-
+async fn spawn_new_generation(
+    new_cfg: &Config,
+    ctx: &SpawnContext,
+    join_set: &mut JoinSet<FlowExit>,
+    registry: &mut FlowRegistry,
+    to_keep: &BTreeSet<String>,
+) {
     for flow in &new_cfg.flow {
         if !flow.enabled {
             info!(
@@ -316,13 +380,21 @@ pub(crate) async fn run_reload(
         // is independently filtered by `handle_respawn_request`'s
         // `handles.contains_key` check.)
         registry.respawning_flows.remove(&flow.name);
-        spawn_flow(flow, new_cfg.as_ref(), ctx, join_set, registry).await;
+        spawn_flow(flow, new_cfg, ctx, join_set, registry).await;
     }
+}
 
-    // Clear any stale `(reload)` entry from a prior failed parse
-    // BEFORE refreshing flow_names — a status reader interleaving
-    // between these two writes would otherwise observe fresh
-    // flow_names alongside the stale `(reload)` entry.
+/// Clear the stale `(reload)` entry from a prior failed parse BEFORE
+/// refreshing flow_names — a status reader interleaving between
+/// these two writes would otherwise observe fresh flow_names
+/// alongside the stale `(reload)` entry. Then refresh the control
+/// handler's flow_names mirror and re-emit Ready so systemd leaves
+/// the Reloading state.
+async fn finalize_reload(
+    ctx: &SpawnContext,
+    control_handler: &Arc<ControlHandler>,
+    registry: &FlowRegistry,
+) {
     ctx.last_errors.lock().await.remove(RELOAD_SYNTHETIC_KEY);
 
     *control_handler.flow_names.write().await = registry.handles.keys().cloned().collect();
