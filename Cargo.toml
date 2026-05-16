@@ -39,7 +39,7 @@ gix-credentials = "0.38"
 gix-hash = { version = "0.25", features = ["sha1"] }
 gix-refspec = "0.41"
 
-octocrab = "0.49"
+octocrab = "0.50"
 
 twilight-http = { version = "0.17", default-features = false, features = ["rustls-native-roots", "decompression"] }
 twilight-model = "0.17"
@@ -58,7 +58,7 @@ clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 clap_complete = { version = "4.6", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = { version = "0.9", features = ["preserve_order"] }
+toml = { version = "1", features = ["preserve_order"] }
 humantime-serde = "1"
 humantime = "2"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
@@ -83,7 +83,11 @@ url = "2.5"
 uuid = { version = "1", features = ["v4", "serde"] }
 bytes = "1"
 # sha2: install-manifest entry hashing (sha256 hash + mode + path).
-sha2 = "0.10"
+# sha2 0.11's `Digest::finalize` returns `hybrid_array::Array<u8, N>` —
+# the old `LowerHex` impl on `GenericArray<u8, N>` does not carry
+# forward, so callers hex-encode the bytes through `hex` instead.
+sha2 = "0.11"
+hex = "0.4"
 # libc: SO_PEERCRED uid/gid checks for control socket peer authentication.
 # geteuid() called from cli/check.rs and control/server.rs.
 libc = "0.2"
@@ -126,7 +130,7 @@ serial_test = "3"
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
-rstest = "0.24"
+rstest = "0.26"
 # tracing-test: capture and assert tracing events produced during a
 # test. The `no-env-filter` feature is required for integration tests
 # under `tests/` because cargo treats each `tests/<name>.rs` as its

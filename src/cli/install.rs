@@ -885,7 +885,7 @@ use crate::util::atomic_write;
 fn hex_sha256(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
-    format!("{:x}", h.finalize())
+    hex::encode(h.finalize())
 }
 
 /// Returns `$HOME` as a `PathBuf` if it's set and non-empty. Used so
@@ -920,7 +920,7 @@ pub fn file_sha256(p: &Path) -> io::Result<String> {
         }
         h.update(&buf[..n]);
     }
-    Ok(format!("{:x}", h.finalize()))
+    Ok(hex::encode(h.finalize()))
 }
 
 #[cfg(test)]
