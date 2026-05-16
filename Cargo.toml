@@ -117,7 +117,7 @@ http-body = "1"
 http-body-util = "0.1"
 
 [build-dependencies]
-vergen-gix = { version = "1", features = ["build"] }
+vergen-gix = { version = "9", features = ["build"] }
 anyhow = "1"
 
 [features]
